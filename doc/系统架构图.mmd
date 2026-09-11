@@ -1,0 +1,68 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px' }}}%%
+flowchart TD
+    %% ===== Row 1: 接入层 (left to right) =====
+    subgraph R1 [" "]
+        direction LR
+        A["Web前端<br/>(React SPA)"] --> B["管理后台<br/>(React SPA)"] --> C["客户端SDK<br/>(Java)"] --> D["API Gateway<br/>(Spring Cloud Gateway)"]
+    end
+
+    %% ===== Row 2: 网关层 (right to left visually) =====
+    subgraph R2 [" "]
+        direction RL
+        H["租户识别"] --> G["认证"] --> F["限流"] --> E["路由"]
+    end
+
+    %% ===== Row 3: 业务服务层 (left to right) =====
+    subgraph R3 [" "]
+        direction LR
+        I["数据资产发现<br/>Service"] --> J["分类分级引擎<br/>Service"] --> K["审计引擎<br/>Service"] --> L["合规评估<br/>Service"]
+    end
+
+    %% ===== Row 4: 业务服务层续 (right to left visually) =====
+    subgraph R4 [" "]
+        direction RL
+        P["用户权限<br/>Service"] --> O["租户管理<br/>Service"] --> N["报告引擎<br/>Service"] --> M["告警引擎<br/>Service"]
+    end
+
+    %% ===== Row 5: 基础设施层 (left to right) =====
+    subgraph R5 [" "]
+        direction LR
+        Q["PostgreSQL<br/>(主从)"] --> R["Redis<br/>(集群)"] --> S["RabbitMQ<br/>(集群)"] --> T["Elasticsearch<br/>(集群)"]
+    end
+
+    %% ===== Row 6: 基础设施层续 (right to left visually) =====
+    subgraph R6 [" "]
+        direction RL
+        V["配置中心<br/>(Nacos)"] --> U["MinIO/OSS<br/>(文件存储)"]
+    end
+
+    %% ===== Snake connections between rows =====
+    D ==> H
+    E ==> I
+    L ==> M
+    P ==> Q
+    T ==> U
+
+    %% ===== Styling =====
+    style A fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:10,ry:10
+    style B fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:10,ry:10
+    style C fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:10,ry:10
+    style D fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:10,ry:10
+    style E fill:#50C878,stroke:#3A9D5E,color:#fff,rx:10,ry:10
+    style F fill:#50C878,stroke:#3A9D5E,color:#fff,rx:10,ry:10
+    style G fill:#50C878,stroke:#3A9D5E,color:#fff,rx:10,ry:10
+    style H fill:#50C878,stroke:#3A9D5E,color:#fff,rx:10,ry:10
+    style I fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style J fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style K fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style L fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style M fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style N fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style O fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style P fill:#FF8C42,stroke:#CC6F35,color:#fff,rx:10,ry:10
+    style Q fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style R fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style S fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style T fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style U fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style V fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10

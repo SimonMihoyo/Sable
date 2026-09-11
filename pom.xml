@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/>
+	</parent>
+	<groupId>me.kirara</groupId>
+	<artifactId>sable</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>Sablé</name>
+	<description>Sablé 数据合规管理系统</description>
+
+	<modules>
+		<module>sable-common</module>
+		<module>sable-system</module>
+		<module>sable-discovery</module>
+		<module>sable-classify</module>
+		<module>sable-audit</module>
+		<module>sable-assessment</module>
+		<module>sable-alert</module>
+		<module>sable-report</module>
+		<module>sable-sdk</module>
+		<module>sable-app</module>
+	</modules>
+
+	<properties>
+		<java.version>17</java.version>
+		<sable.version>${project.version}</sable.version>
+		<mybatis-plus.version>3.5.7</mybatis-plus.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-common</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-system</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-discovery</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-classify</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-audit</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-assessment</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-alert</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-report</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>me.kirara</groupId>
+				<artifactId>sable-sdk</artifactId>
+				<version>${sable.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

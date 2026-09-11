@@ -1,0 +1,48 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px' }}}%%
+flowchart TD
+    %% ===== Row 1: 参与者 (left to right) =====
+    subgraph R1 [" "]
+        direction LR
+        A1["系统管理员"] --> A2["合规管理员"] --> A3["安全审计员"] --> A4["数据管理员"] --> A5["普通用户"]
+    end
+
+    %% ===== Row 2: 用例 (right to left visually) =====
+    subgraph R2 [" "]
+        direction RL
+        UC7["多维度检索"] --> UC6["审计日志采集"] --> UC5["分级规则引擎"] --> UC4["分类分级标准管理"] --> UC3["敏感数据识别"] --> UC2["数据资产扫描"] --> UC1["数据源管理"]
+    end
+
+    %% ===== Row 3: 用例续 (left to right) =====
+    subgraph R3 [" "]
+        direction LR
+        UC8["异常检测与告警"] --> UC9["合规评估执行"] --> UC10["评估标准管理"] --> UC11["整改管理"] --> UC12["生成合规评估报告"] --> UC13["生成数据资产报告"] --> UC14["用户与权限管理"]
+    end
+
+    %% ===== Snake connections between rows =====
+    A5 ==> UC7
+    UC1 ==> UC8
+
+    %% ===== Styling: 参与者 =====
+    style A1 fill:#E74C3C,stroke:#C0392B,color:#fff,rx:10,ry:10
+    style A2 fill:#E67E22,stroke:#D35400,color:#fff,rx:10,ry:10
+    style A3 fill:#F1C40F,stroke:#D4AC0D,color:#333,rx:10,ry:10
+    style A4 fill:#2ECC71,stroke:#27AE60,color:#fff,rx:10,ry:10
+    style A5 fill:#3498DB,stroke:#2980B9,color:#fff,rx:10,ry:10
+
+    %% ===== Styling: 用例 Row 2 =====
+    style UC1 fill:#1ABC9C,stroke:#16A085,color:#fff,rx:10,ry:10
+    style UC2 fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:10,ry:10
+    style UC3 fill:#9B59B6,stroke:#7D3C98,color:#fff,rx:10,ry:10
+    style UC4 fill:#E91E63,stroke:#C2185B,color:#fff,rx:10,ry:10
+    style UC5 fill:#FF5722,stroke:#E64A19,color:#fff,rx:10,ry:10
+    style UC6 fill:#607D8B,stroke:#455A64,color:#fff,rx:10,ry:10
+    style UC7 fill:#795548,stroke:#5D4037,color:#fff,rx:10,ry:10
+
+    %% ===== Styling: 用例 Row 3 =====
+    style UC8 fill:#00BCD4,stroke:#0097A7,color:#fff,rx:10,ry:10
+    style UC9 fill:#8BC34A,stroke:#689F38,color:#fff,rx:10,ry:10
+    style UC10 fill:#FFC107,stroke:#FFA000,color:#333,rx:10,ry:10
+    style UC11 fill:#FF9800,stroke:#F57C00,color:#fff,rx:10,ry:10
+    style UC12 fill:#009688,stroke:#00796B,color:#fff,rx:10,ry:10
+    style UC13 fill:#3F51B5,stroke:#303F9F,color:#fff,rx:10,ry:10
+    style UC14 fill:#673AB7,stroke:#512DA8,color:#fff,rx:10,ry:10
