@@ -13,9 +13,10 @@
 	<description>客户端审计采集SDK — 审计事件采集与上报</description>
 
 	<dependencies>
+		<!-- 轻量 HTTP 客户端依赖；不引入 Spring / MyBatis，便于独立嵌入业务系统 -->
 		<dependency>
-			<groupId>me.kirara</groupId>
-			<artifactId>sable-common</artifactId>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
 		</dependency>
 	</dependencies>
 
