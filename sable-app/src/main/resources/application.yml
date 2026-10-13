@@ -38,3 +38,32 @@ mybatis-plus:
 logging:
   level:
     me.kirara.sable: debug
+
+# 认证配置（对应 me.kirara.sable.system.auth.AuthProperties）
+sable:
+  auth:
+    # HS256 签名密钥，至少 32 字节；生产环境务必用环境变量 SABLE_JWT_SECRET 覆盖
+    secret: ${SABLE_JWT_SECRET:sable-dev-secret-change-me-please-32bytes-min}
+    access-token-ttl: 30m
+    refresh-token-ttl: 7d
+    bcrypt-strength: 10
+    issuer: sable
+    # 连续登录失败 5 次锁定 15 分钟
+    max-login-fail: 5
+    lock-duration: 15m
+    # 改密时禁止与最近 3 次密码重复
+    password-history-size: 3
+    # 免认证路径白名单（Ant 风格）。注意：此处一旦出现，会整体覆盖代码里的默认值，需列全。
+    # 登出之所以放行：它按提交的令牌做吊销，令牌无效时是空操作；若要求先认证，
+    # 客户端在令牌过期后将无法调用登出接口。
+    whitelist:
+      - /auth/login
+      - /auth/refresh
+      - /auth/logout
+      - /error
+      - /favicon.ico
+
+  # 定时任务
+  task:
+    # 清理已过期的令牌吊销记录（6 段 cron：秒 分 时 日 月 周），默认每天 03:30
+    revocation-cleanup-cron: "0 30 3 * * *"

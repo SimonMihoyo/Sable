@@ -118,25 +118,60 @@
 
 **请求头：**
 
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
-X-Tenant-Id: 1001          ← 超级管理员跨租户操作时需要
-X-Request-Id: req_abc123   ← 客户端生成的请求追踪ID（可选）
-```
+| 请求头 | 必需 | 说明 |
+|--------|------|------|
+| `Authorization` | 是 | `Bearer <accessToken>` |
+| `X-Tenant-Id` | 否 | 租户以令牌中的 `tid` 为准；仅当令牌未携带租户（系统级用户）时本请求头才生效，用于超级管理员跨租户操作 |
+| `X-Request-Id` | 否 | 客户端生成的请求追踪 ID |
+
+**免认证路径（白名单）：**
+
+| 路径 | 放行原因 |
+|------|---------|
+| `/auth/login` | 还没有令牌 |
+| `/auth/refresh` | 访问令牌已过期，只能用刷新令牌换新 |
+| `/auth/logout` | 按提交的令牌做吊销，令牌无效时是空操作；若要求先认证，客户端在令牌过期后将无法登出 |
+| `/error`、`/favicon.ico` | 容器内部转发与浏览器默认请求 |
+
+除白名单外**所有**路径都必须携带有效的访问令牌，白名单由 `sable.auth.whitelist` 配置。
+
+**认证失败响应：** HTTP `401` + 统一响应体（结构见 1.2 节），`code` 取值：
+
+| code | 场景 |
+|------|------|
+| 40002 | 令牌已过期 |
+| 40003 | 缺少令牌 / 令牌非法 / 令牌类型不对（例如拿刷新令牌访问业务接口）/ 令牌已被吊销 |
 
 **Token 结构 (JWT Payload)：**
 
 ```json
 {
+  "iss": "sable",
   "sub": "42",
-  "tenantId": 1001,
-  "username": "admin",
+  "jti": "34206cf8-8029-4743-a85c-eed2ab3c9034",
+  "tid": 1001,
+  "usr": "admin",
   "roles": ["SUPER_ADMIN"],
-  "permissions": ["data_source:read", "data_source:write", "..."],
+  "perm": ["data_source:read", "data_source:write"],
+  "typ": "access",
   "iat": 1725768600,
   "exp": 1725770400
 }
 ```
+
+| 声明 | 含义 |
+|------|------|
+| `sub` | 用户 ID（字符串） |
+| `jti` | 令牌唯一标识；登出吊销按它定位单枚令牌，不能用 `iat` 代替（秒级精度无法区分同秒签发的令牌） |
+| `tid` | 租户 ID；系统级用户为空 |
+| `usr` | 用户名 |
+| `roles` | 角色标识列表（取角色的 `name`） |
+| `perm` | 权限标识列表。**当前恒为空数组** —— 接口级鉴权尚未实现，权限装配待其落地时补齐 |
+| `typ` | 令牌类型：`access` / `refresh`。刷新令牌只带 `sub`、`jti`、`typ`，不含业务声明 |
+
+**租户如何确定：** 以令牌中的 `tid` 为准。`tenant_user` 允许一个用户同时属于多个租户，
+而登录接口没有租户参数，因此当前在登录 / 刷新时取"最早加入"的那一个写入令牌
+（多租户选择与切换尚未设计）。
 
 ---
 
@@ -202,6 +237,16 @@ POST /auth/refresh
 POST /auth/logout
 ```
 
+**请求头：** `Authorization: Bearer <accessToken>`（被吊销的访问令牌）
+
+**请求体：** 可选
+
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIs..."   // 可选，一并吊销刷新令牌
+}
+```
+
 **响应：**
 
 ```json
@@ -210,6 +255,13 @@ POST /auth/logout
   "message": "success"
 }
 ```
+
+**说明：**
+- 本接口在**免认证白名单**内：没有令牌、令牌已过期或非法时同样返回 `success`，
+  不暴露令牌状态；客户端可在令牌失效后照常调用以清理会话。
+- 服务端按令牌的 `jti` 写入吊销表，此后该令牌一律判为无效。
+- 刷新令牌不在请求头中，若客户端希望彻底登出，应在请求体携带 `refreshToken` 一并吊销；
+  否则刷新令牌在有效期内仍可换取新的访问令牌。
 
 ### 2.4 修改密码
 

@@ -1,7 +1,10 @@
 package me.kirara.sable.system.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import me.kirara.sable.common.R;
+import me.kirara.sable.common.UserContext;
+import me.kirara.sable.common.util.BearerTokens;
 import me.kirara.sable.system.dto.LoginRequest;
 import me.kirara.sable.system.dto.LoginResponse;
 import me.kirara.sable.system.dto.PasswordChangeRequest;
@@ -34,16 +37,24 @@ public class AuthController {
         return R.ok(authService.refresh(request.getRefreshToken()));
     }
 
+    /**
+     * 退出登录。
+     *
+     * <p>访问令牌从 {@code Authorization} 头取（与其它接口一致），刷新令牌不在请求头里，
+     * 只能由调用方放进可选的请求体。请求体为空时只吊销访问令牌。</p>
+     */
     @PostMapping("/logout")
-    public R<Void> logout(@RequestBody TokenRequest request) {
-        authService.logout(request.getAccessToken());
+    public R<Void> logout(HttpServletRequest request,
+                          @RequestBody(required = false) TokenRequest body) {
+        authService.logout(BearerTokens.resolve(request.getHeader(BearerTokens.HEADER)),
+                body == null ? null : body.getRefreshToken());
         return R.ok();
     }
 
     @PutMapping("/password")
     public R<Void> changePassword(@Valid @RequestBody PasswordChangeRequest request) {
-        // TODO 从安全上下文获取当前 userId
-        authService.changePassword(null, request.getOldPassword(), request.getNewPassword());
+        // 用户身份由 JwtAuthenticationFilter 从 Authorization 头解析后写入 UserContext
+        authService.changePassword(UserContext.getUserId(), request.getOldPassword(), request.getNewPassword());
         return R.ok();
     }
 }
