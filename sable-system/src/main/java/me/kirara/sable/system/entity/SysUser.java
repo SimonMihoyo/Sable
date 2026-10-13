@@ -6,14 +6,21 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import me.kirara.sable.common.entity.BaseEntity;
 import java.time.LocalDateTime;
 
-/** 系统用户表 public.sys_user */
+/**
+ * 系统用户表 public.sys_user
+ *
+ * <p><b>本实体含凭证字段（{@code passwordHash}、{@code mfaSecret}），不得直接作为接口响应。</b>
+ * 对外一律走 {@code UserResponse} 白名单投影。库模块不引 Jackson（见根 `AGENTS.md` 的
+ * {@code provided} 约定），因此"永不序列化这两个字段"的兜底规则写在启动模块的
+ * {@code me.kirara.sable.config.JacksonConfig}（Jackson mixin）里 —— 新增敏感列时记得同步。</p>
+ */
 @TableName("sys_user")
 public class SysUser extends BaseEntity {
 
     @TableId(type = IdType.AUTO)
     private Long id;
     private String username;
-    /** BCrypt 哈希 */
+    /** BCrypt 哈希。绝不对外暴露，兜底规则见类注释。 */
     private String passwordHash;
     private String email;
     private String phone;
@@ -22,7 +29,7 @@ public class SysUser extends BaseEntity {
     /** ACTIVE / LOCKED / DISABLED */
     private String status;
     private Boolean mfaEnabled;
-    /** TOTP 密钥（加密存储） */
+    /** TOTP 密钥（加密存储）。绝不对外暴露，兜底规则见类注释。 */
     private String mfaSecret;
     private LocalDateTime lastLoginAt;
     private String lastLoginIp;

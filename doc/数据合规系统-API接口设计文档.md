@@ -526,6 +526,18 @@ GET /system/users/me
 }
 ```
 
+**关于用户相关接口的响应（已实现约定）：**
+
+- 4.1 / 4.2 / 4.9 一律返回**脱敏投影**，字段白名单为：
+  `id` / `username` / `displayName` / `email` / `phone` / `avatarUrl` / `status` /
+  `mfaEnabled` / `lastLoginAt` / `lockedUntil` / `createdAt` / `updatedAt`。
+- `passwordHash`、`mfaSecret` 属凭证，**任何接口都不会返回**。除投影本身外，启动模块还挂了一层
+  Jackson 兜底规则：即使有人直接序列化 `sys_user` 实体（或把它嵌进别的响应对象），这两个字段同样不会出网。
+- `lastLoginIp`、`loginFailCount`、`passwordChangedAt`、`deletedAt` 属内部状态，一并不返回。
+
+> **尚未实现（勿按此联调）**：上例中的 `department` 在 `sys_user` 表中**没有对应列**，
+> `roles` 与 `permissions` 也尚未装配 —— 它们是设计目标，`GET /system/users/me` 目前返回空数据的桩。
+
 ---
 
 ## 五、数据源管理接口

@@ -8,6 +8,7 @@ import me.kirara.sable.common.page.PageQuery;
 import me.kirara.sable.common.page.PageResult;
 import me.kirara.sable.system.dto.StatusRequest;
 import me.kirara.sable.system.dto.UserCreateRequest;
+import me.kirara.sable.system.dto.UserResponse;
 import me.kirara.sable.system.dto.UserUpdateRequest;
 import me.kirara.sable.system.entity.SysUser;
 import me.kirara.sable.system.service.SysUserService;
@@ -34,25 +35,20 @@ public class UserController {
         this.sysUserService = sysUserService;
     }
 
+    /**
+     * 创建用户。
+     *
+     * <p>密码的哈希在 {@link SysUserService#createUser} 内完成；响应经 {@link UserResponse}
+     * 脱敏，不会回吐 {@code passwordHash}。</p>
+     */
     @PostMapping
-    public R<SysUser> create(@Valid @RequestBody UserCreateRequest request) {
-        SysUser user = new SysUser();
-        user.setUsername(request.getUsername());
-        // TODO 使用 BCrypt 加密
-        user.setPasswordHash(request.getPassword());
-        user.setEmail(request.getEmail());
-        user.setPhone(request.getPhone());
-        user.setDisplayName(request.getDisplayName());
-        user.setStatus("ACTIVE");
-        user.setMfaEnabled(false);
-        user.setLoginFailCount(0);
-        sysUserService.save(user);
-        return R.ok(user);
+    public R<UserResponse> create(@Valid @RequestBody UserCreateRequest request) {
+        return R.ok(UserResponse.from(sysUserService.createUser(request)));
     }
 
     @GetMapping
-    public R<PageResult<SysUser>> list(PageQuery query,
-                                       @RequestParam(required = false) String status) {
+    public R<PageResult<UserResponse>> list(PageQuery query,
+                                            @RequestParam(required = false) String status) {
         LambdaQueryWrapper<SysUser> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(status != null, SysUser::getStatus, status)
                .and(query.getKeyword() != null, w -> w
@@ -60,11 +56,12 @@ public class UserController {
                        .or().like(SysUser::getDisplayName, query.getKeyword()))
                .orderByDesc(SysUser::getCreatedAt);
         Page<SysUser> page = sysUserService.page(new Page<>(query.getPage(), query.getSize()), wrapper);
-        return R.ok(PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords()));
+        return R.ok(PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(),
+                UserResponse.fromAll(page.getRecords())));
     }
 
     @GetMapping("/me")
-    public R<SysUser> me() {
+    public R<UserResponse> me() {
         // TODO 从安全上下文中获取当前用户
         return R.ok();
     }
