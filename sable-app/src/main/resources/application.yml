@@ -1,5 +1,12 @@
 server:
   port: 8080
+  servlet:
+    encoding:
+      # 强制响应声明 charset=UTF-8：缺省时 application/json 不带 charset，
+      # 部分客户端会按本地默认编码（如 GBK）解码，中文显示为乱码
+      charset: UTF-8
+      force: true
+      force-response: true
 
 spring:
   application:

@@ -30,8 +30,14 @@
 
 	<properties>
 		<java.version>17</java.version>
+		<!-- 源码/报告统一 UTF-8：不设置时 javac 用平台默认编码，
+		     中文 Windows（GBK）环境编译会把中文字符串常量直接编坏 -->
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+		<maven.compiler.encoding>UTF-8</maven.compiler.encoding>
 		<sable.version>${project.version}</sable.version>
 		<mybatis-plus.version>3.5.7</mybatis-plus.version>
+		<jjwt.version>0.12.6</jjwt.version>
 	</properties>
 
 	<dependencyManagement>
@@ -92,6 +98,23 @@
 				<groupId>com.baomidou</groupId>
 				<artifactId>mybatis-plus-annotation</artifactId>
 				<version>${mybatis-plus.version}</version>
+			</dependency>
+
+			<!-- JWT（轻量认证方案：仅用其签发 / 校验，不引入 Spring Security 框架） -->
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-api</artifactId>
+				<version>${jjwt.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-impl</artifactId>
+				<version>${jjwt.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-jackson</artifactId>
+				<version>${jjwt.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
