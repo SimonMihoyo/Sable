@@ -6,6 +6,9 @@ public enum ErrorCode {
     SUCCESS(0, "success"),
     INTERNAL_ERROR(1, "系统内部错误"),
     PARAM_INVALID(2, "参数校验失败"),
+    NOT_FOUND(404, "资源不存在"),   // 请求路径未匹配到任何接口或静态资源
+    METHOD_NOT_ALLOWED(405, "请求方法不支持"),   // 路径存在但 HTTP 方法不匹配
+    MEDIA_TYPE_NOT_SUPPORTED(415, "请求媒体类型不支持"),   // Content-Type 不受支持
 
     // 认证 40001-40099
     AUTH_FAILED(40001, "认证失败"),
@@ -13,6 +16,7 @@ public enum ErrorCode {
     TOKEN_INVALID(40003, "Token无效"),
     MFA_REQUIRED(40004, "需要MFA验证"),
     MFA_INVALID(40005, "MFA验证码错误"),
+    ACCOUNT_LOCKED(40006, "账号已锁定"),
 
     // 租户 40101-40199
     TENANT_NOT_FOUND(40101, "租户不存在"),
