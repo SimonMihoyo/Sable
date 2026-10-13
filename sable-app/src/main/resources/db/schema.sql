@@ -61,6 +61,40 @@ CREATE TABLE public.sys_user (
 CREATE INDEX idx_sys_user_email ON public.sys_user (email) WHERE deleted_at IS NULL;
 CREATE INDEX idx_sys_user_phone ON public.sys_user (phone) WHERE deleted_at IS NULL;
 
+-- 密码历史 — 记录用户曾经使用过的密码哈希，用于阻止重复使用近期密码
+-- （策略：不得与最近 N 次相同，N 由 sable.auth.password-history-size 配置，默认 3）
+-- 追加写、不更新，故只有 changed_at 一个时间戳列，也没有 deleted_at
+CREATE TABLE public.password_history (
+    id              BIGSERIAL       PRIMARY KEY,
+    user_id         BIGINT          NOT NULL REFERENCES public.sys_user(id),
+    password_hash   VARCHAR(256)    NOT NULL,                   -- BCrypt哈希
+    changed_at      TIMESTAMP       NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_password_history_user ON public.password_history (user_id, changed_at DESC);
+
+-- 令牌吊销表 — 登出 / 强制下线时按 jti 记一行，认证入口逐次比对本表
+-- 为什么不用 iat：iat 只有秒级精度，同一秒内的两枚令牌无法区分，会误伤
+-- 追加写、行不可变，故只有 revoked_at 一个时间戳列，也没有 deleted_at
+-- 令牌自然过期后本表记录即失去意义，由定时任务清理（见 TokenRevocationCleanupJob）
+CREATE TABLE public.token_revocation (
+    id              BIGSERIAL       PRIMARY KEY,
+    user_id         BIGINT          REFERENCES public.sys_user(id),
+    jti             VARCHAR(64)     NOT NULL,                   -- JWT 标准声明 jti
+    token_type      VARCHAR(16)     NOT NULL,                   -- access / refresh
+    expires_at      TIMESTAMP       NOT NULL,                   -- 令牌自身过期时间
+    revoked_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
+    reason          VARCHAR(32)     NOT NULL DEFAULT 'LOGOUT',
+
+    CONSTRAINT uq_token_revocation_jti UNIQUE (jti),
+    CONSTRAINT chk_token_revocation_type CHECK (token_type IN ('access', 'refresh'))
+);
+
+-- 清理任务按 expires_at 扫过期行
+CREATE INDEX idx_token_revocation_expires ON public.token_revocation (expires_at);
+-- 按用户强制下线时按 user_id 查
+CREATE INDEX idx_token_revocation_user    ON public.token_revocation (user_id);
+
 CREATE TABLE public.role (
     id              BIGSERIAL       PRIMARY KEY,
     tenant_id       BIGINT          NOT NULL REFERENCES public.tenant(id),
@@ -450,35 +484,46 @@ CREATE TABLE attachment (
 
 CREATE INDEX idx_attachment_biz ON attachment (biz_type, biz_id) WHERE deleted_at IS NULL;
 
--- 定期分析索引使用情况（建议每周执行）
-SELECT
-    schemaname, tablename, indexname,
-    idx_scan,         -- 索引扫描次数
-    idx_tup_read,     -- 索引读取行数
-    idx_tup_fetch     -- 索引返回行数
-FROM pg_stat_user_indexes
-ORDER BY idx_scan ASC;
+-- ============================================================
+-- 【运维片段】以下为定期巡检查询，不属于初始化 DDL，故注释保留。
+-- 注意：pg_stat_user_indexes 的列名是 relname / indexrelname（不是 tablename / indexname），
+--       且原写法会因列名不存在直接报错；如需执行请复制出去单独跑。
+-- ============================================================
+-- -- 定期分析索引使用情况（建议每周执行）
+-- SELECT
+--     schemaname, relname AS tablename, indexrelname AS indexname,
+--     idx_scan,         -- 索引扫描次数
+--     idx_tup_read,     -- 索引读取行数
+--     idx_tup_fetch     -- 索引返回行数
+-- FROM pg_stat_user_indexes
+-- ORDER BY idx_scan ASC;
+--
+-- -- 识别未使用的索引（idx_scan = 0 且存在超过7天）
+-- -- 注意：需结合 pg_stat_statements 综合判断
+--
+-- -- 索引膨胀检查
+-- SELECT
+--     schemaname, relname AS tablename, indexrelname AS indexname,
+--     pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+-- FROM pg_stat_user_indexes
+-- ORDER BY pg_relation_size(indexrelid) DESC
+-- LIMIT 20;
 
--- 识别未使用的索引（idx_scan = 0 且存在超过7天）
--- 注意：需结合 pg_stat_statements 综合判断
+-- ============================================================
+-- 【模板】租户 Schema 创建流程（按租户逐个执行，不属于本脚本）
+-- 下方语句中的 {id} 是租户 ID 占位符，仅为模板示意：
+-- {} 不是合法的 SQL 标识符，直接执行会语法报错，故此处保留为注释。
+-- 实际使用时替换为具体租户 ID（如 tenant_1），或由应用/Flyway 按租户生成。
+-- ============================================================
+-- 1. 创建租户 Schema
+-- CREATE SCHEMA tenant_{id};
 
--- 索引膨胀检查
-SELECT
-    schemaname, tablename, indexname,
-    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
-FROM pg_stat_user_indexes
-ORDER BY pg_relation_size(indexrelid) DESC
-LIMIT 20;
-
--- 1. 创建租户Schema
-CREATE SCHEMA tenant_{id};
-
--- 2. 在租户Schema中创建所有业务表
+-- 2. 在租户 Schema 中创建所有业务表
 -- （通过Flyway迁移脚本自动执行）
 
 -- 3. 授权（应用用户使用受限权限）
-GRANT USAGE ON SCHEMA tenant_{id} TO app_user;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tenant_{id} TO app_user;
+-- GRANT USAGE ON SCHEMA tenant_{id} TO app_user;
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tenant_{id} TO app_user;
 
 -- 由定时任务（pg_cron 或应用层调度器）每月执行
 DO $$
@@ -502,23 +547,25 @@ END $$;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 加密函数
-CREATE OR REPLACE fn_encrypt_data(plain_data TEXT, key TEXT)
+CREATE OR REPLACE FUNCTION fn_encrypt_data(plain_data TEXT, key TEXT)
 RETURNS BYTEA AS $$
     SELECT pgp_sym_encrypt(plain_data, key);
 $$ LANGUAGE SQL IMMUTABLE;
 
 -- 解密函数
-CREATE OR REPLACE fn_decrypt_data(encrypted_data BYTEA, key TEXT)
+CREATE OR REPLACE FUNCTION fn_decrypt_data(encrypted_data BYTEA, key TEXT)
 RETURNS TEXT AS $$
     SELECT pgp_sym_decrypt(encrypted_data, key);
 $$ LANGUAGE SQL IMMUTABLE;
 
--- 禁止UPDATE和DELETE（通过角色权限控制）
-REVOKE UPDATE, DELETE ON audit_log FROM app_user;
-GRANT INSERT, SELECT ON audit_log TO app_user;
+-- 禁止 UPDATE / DELETE（通过受限应用角色控制）
+-- 注意：app_user 角色当前既未在本脚本中创建，应用也默认以库属主身份连接，
+-- 故以下授权暂时不生效，待「多租户 + 受限应用角色」落地时再启用（需超级用户创建角色）。
+-- REVOKE UPDATE, DELETE ON audit_log FROM app_user;
+-- GRANT INSERT, SELECT ON audit_log TO app_user;
 
 -- 哈希链校验函数
-CREATE OR REPLACE fn_verify_hash_chain(
+CREATE OR REPLACE FUNCTION fn_verify_hash_chain(
     p_start_time TIMESTAMP,
     p_end_time   TIMESTAMP
 ) RETURNS TABLE (
@@ -534,8 +581,8 @@ DECLARE
 BEGIN
     FOR rec IN
         SELECT * FROM audit_log
-        WHERE created_at BETWEEN p_start_time AND p_end_time
-        ORDER BY created_at, id
+        WHERE audit_log.created_at BETWEEN p_start_time AND p_end_time
+        ORDER BY audit_log.created_at, audit_log.id
     LOOP
         expected := encode(sha256(convert_to(
             rec.id || rec.user_id || rec.operation || rec.target_desc ||
