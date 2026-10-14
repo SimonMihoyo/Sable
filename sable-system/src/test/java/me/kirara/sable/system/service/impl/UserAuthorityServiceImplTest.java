@@ -156,6 +156,86 @@ class UserAuthorityServiceImplTest {
         verify(tenantUserMapper, never()).selectList(any());
     }
 
+    @Test
+    @DisplayName("多个角色的权限合并去重，顺序按首次出现")
+    void mergesPermissionsAcrossRoles() {
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L), grant(6L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(
+                // 逗号后带空格 —— 即 PostgreSQL jsonb 读回时的规范化形态
+                role(5L, "AUDITOR", "[\"audit_log:read\", \"report:export\"]"),
+                role(6L, "VIEWER", "[\"audit_log:read\", \"data_source:read\"]")));
+
+        UserAuthority authority = service.resolve(USER_ID);
+
+        assertEquals(List.of("AUDITOR", "VIEWER"), authority.getRoleNames());
+        assertEquals(List.of("audit_log:read", "report:export", "data_source:read"),
+                authority.getPermissions(),
+                "被两个角色重复授予的 audit_log:read 只应出现一次，且位置在首次出现处");
+    }
+
+    @Test
+    @DisplayName("权限为空数组或未配置时权限为空列表，不影响角色名")
+    void emptyOrMissingPermissions() {
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L), grant(6L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(
+                role(5L, "AUDITOR", "[]"),
+                role(6L, "VIEWER", null)));
+
+        UserAuthority authority = service.resolve(USER_ID);
+
+        assertEquals(List.of("AUDITOR", "VIEWER"), authority.getRoleNames());
+        assertTrue(authority.getPermissions().isEmpty());
+    }
+
+    @Test
+    @DisplayName("permissions 不是字符串数组时按空处理，不抛异常也不污染其它角色")
+    void malformedPermissionsTreatedAsEmpty() {
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L), grant(6L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(
+                role(5L, "AUDITOR", "{\"oops\":true}"),
+                role(6L, "VIEWER", "[\"audit_log:read\"]")));
+
+        UserAuthority authority = service.resolve(USER_ID);
+
+        assertEquals(List.of("audit_log:read"), authority.getPermissions(),
+                "坏掉的配置应被跳过，而不是让整个装配失败");
+    }
+
+    @Test
+    @DisplayName("resolveInTenant 按指定租户装配，不查成员关系表")
+    void resolveInExplicitTenant() {
+        // 注意：mock 的 selectList(any()) 不校验 wrapper 内容，
+        // 所以这里不断言"查询条件里的 tenantId 是 2002" —— 那由集成测试覆盖。
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(role(5L, "AUDITOR", "[\"audit_log:read\"]")));
+
+        UserAuthority authority = service.resolveInTenant(USER_ID, 2002L);
+
+        assertEquals(2002L, authority.getTenantId().longValue(),
+                "租户应原样取自入参，而不是回退到「最早加入的租户」");
+        assertEquals(List.of("AUDITOR"), authority.getRoleNames());
+        assertEquals(List.of("audit_log:read"), authority.getPermissions());
+        // 这是它与 resolve(userId) 的关键差别：不再经 tenant_user 推定租户
+        verify(tenantUserMapper, never()).selectList(any());
+    }
+
+    @Test
+    @DisplayName("resolveInTenant 的空租户是正常形态（系统级用户），返回空归属且不查库")
+    void resolveInTenantWithNullArgs() {
+        UserAuthority noTenant = service.resolveInTenant(USER_ID, null);
+        assertNull(noTenant.getTenantId());
+        assertTrue(noTenant.getPermissions().isEmpty());
+
+        UserAuthority noUser = service.resolveInTenant(null, TENANT_ID);
+        assertNull(noUser.getTenantId());
+
+        verify(tenantUserRoleMapper, never()).selectList(any());
+        verify(roleMapper, never()).selectList(any());
+    }
+
     private TenantUser membership(Long id, Long tenantId) {
         TenantUser membership = new TenantUser();
         membership.setId(id);
@@ -174,9 +254,15 @@ class UserAuthorityServiceImplTest {
     }
 
     private Role role(Long id, String name) {
+        return role(id, name, null);
+    }
+
+    /** {@code permissions} 传的是该 JSONB 列在 Java 侧的原始字符串形态。 */
+    private Role role(Long id, String name, String permissions) {
         Role role = new Role();
         role.setId(id);
         role.setName(name);
+        role.setPermissions(permissions);
         role.setDeletedAt(null);
         return role;
     }

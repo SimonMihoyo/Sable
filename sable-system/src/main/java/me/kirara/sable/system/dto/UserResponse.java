@@ -41,6 +41,26 @@ public class UserResponse {
     private LocalDateTime updatedAt;
 
     /**
+     * 角色标识列表（角色的 {@code name}），按<b>当前租户</b>装配。
+     *
+     * <p>刻意用空列表而非 {@code null} 作默认值：Jackson 的
+     * {@code default-property-inclusion} 配的是 {@code non_null}，null 会让字段整个从
+     * JSON 里消失，前端就得区分"响应里没有这个键"与"这个键是空数组"两种情形。
+     * 空列表会稳定序列化成 {@code []}，前端可以无脑遍历。</p>
+     *
+     * <p>不在 {@link #from(me.kirara.sable.system.entity.SysUser)} 里赋值 ——
+     * 角色归属来自别的表，属调用方装配的内容。</p>
+     */
+    private List<String> roles = List.of();
+
+    /**
+     * 权限标识列表 —— 该用户全部角色 {@code permissions} 列的并集去重，同样采用空列表默认值。
+     *
+     * <p>当前无权限码字典，值即角色上配置的自由字符串（见 {@code UserAuthority#getPermissions()}）。</p>
+     */
+    private List<String> permissions = List.of();
+
+    /**
      * 由实体投影出响应对象。
      *
      * @param user 用户实体，可为 null（null 时返回 null，便于调用方直接透传）
@@ -103,4 +123,10 @@ public class UserResponse {
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public List<String> getRoles() { return roles; }
+    public void setRoles(List<String> roles) { this.roles = roles == null ? List.of() : roles; }
+    public List<String> getPermissions() { return permissions; }
+    public void setPermissions(List<String> permissions) {
+        this.permissions = permissions == null ? List.of() : permissions;
+    }
 }

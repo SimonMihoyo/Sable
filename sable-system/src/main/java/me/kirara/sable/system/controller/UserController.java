@@ -10,12 +10,14 @@ import me.kirara.sable.common.TenantContext;
 import me.kirara.sable.common.UserContext;
 import me.kirara.sable.common.page.PageQuery;
 import me.kirara.sable.common.page.PageResult;
+import me.kirara.sable.system.auth.UserAuthority;
 import me.kirara.sable.system.dto.StatusRequest;
 import me.kirara.sable.system.dto.UserCreateRequest;
 import me.kirara.sable.system.dto.UserResponse;
 import me.kirara.sable.system.dto.UserUpdateRequest;
 import me.kirara.sable.system.entity.SysUser;
 import me.kirara.sable.system.service.SysUserService;
+import me.kirara.sable.system.service.UserAuthorityService;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,9 +36,11 @@ import java.util.List;
 public class UserController {
 
     private final SysUserService sysUserService;
+    private final UserAuthorityService userAuthorityService;
 
-    public UserController(SysUserService sysUserService) {
+    public UserController(SysUserService sysUserService, UserAuthorityService userAuthorityService) {
         this.sysUserService = sysUserService;
+        this.userAuthorityService = userAuthorityService;
     }
 
     /**
@@ -71,8 +75,12 @@ public class UserController {
      * <p>用户身份由 {@code JwtAuthenticationFilter} 从 {@code Authorization} 头解析后写入
      * {@link UserContext}，本接口据此回查并走 {@link UserResponse} 脱敏投影返回。</p>
      *
-     * <p>注意：响应中的 {@code department} / {@code roles} / {@code permissions} 尚未装配，
-     * 与 API 设计文档 4.9 节的「尚未实现」说明一致。</p>
+     * <p><b>角色与权限按当前请求的租户装配</b>（{@code TenantContext} 里的 {@code tid}，
+     * 由令牌携带）—— 不用 {@code UserAuthorityService#resolve} 那套"最早加入的租户"推定：
+     * 同一个人在不同租户可以是不同角色，前端据此渲染的菜单必须与本次访问的数据范围一致。</p>
+     *
+     * <p>剩下的未装配项是 {@code department}（数据范围权限的前提，见
+     * {@code tenant_user.department}，目前只存不读）。</p>
      */
     @GetMapping("/me")
     public R<UserResponse> me() {
@@ -86,7 +94,12 @@ public class UserController {
             // 令牌本身有效，但它指向的用户已不存在（例如账号已被删除）——按认证失效处理
             throw new BusinessException(ErrorCode.AUTH_FAILED);
         }
-        return R.ok(UserResponse.from(user));
+
+        UserResponse response = UserResponse.from(user);
+        UserAuthority authority = userAuthorityService.resolveInTenant(userId, TenantContext.getTenantId());
+        response.setRoles(authority.getRoleNames());
+        response.setPermissions(authority.getPermissions());
+        return R.ok(response);
     }
 
     @PutMapping("/{id}")

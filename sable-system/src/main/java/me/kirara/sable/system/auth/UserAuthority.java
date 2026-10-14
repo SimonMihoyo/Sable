@@ -16,6 +16,18 @@ public class UserAuthority {
     /** 角色标识列表（角色的 {@code name}，如 SUPER_ADMIN）；无角色时为空列表而非 null。 */
     private List<String> roleNames = List.of();
 
+    /**
+     * 权限标识列表 —— 该用户全部角色 {@code permissions} 列的<b>并集去重</b>。
+     *
+     * <p>权限装配与角色装配放在同一次查询里完成：两者都依赖"这个人在本租户持有哪些角色"，
+     * 分开查会重复往返数据库。</p>
+     *
+     * <p><b>当前无权限码字典</b>：{@code role.permissions} 里是自由字符串
+     * （见 {@code V1__init_schema.sql} 的注释），这里只做聚合、不做校验。
+     * 待接口级鉴权落地并定出权限码字典后，校验才加得进来。</p>
+     */
+    private List<String> permissions = List.of();
+
     public Long getTenantId() {
         return tenantId;
     }
@@ -30,5 +42,13 @@ public class UserAuthority {
 
     public void setRoleNames(List<String> roleNames) {
         this.roleNames = roleNames == null ? List.of() : roleNames;
+    }
+
+    public List<String> getPermissions() {
+        return permissions;
+    }
+
+    public void setPermissions(List<String> permissions) {
+        this.permissions = permissions == null ? List.of() : permissions;
     }
 }
