@@ -59,6 +59,16 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
 		</dependency>
+		<!--
+			接口文档（OpenAPI 3 + Swagger UI）。
+			由团队确认后引入，用途是让前端不必只靠设计文档猜接口：
+			Swagger UI 会按真实代码生成规范，参数与字段以实现为准。
+			只在启动模块引入；库模块不需要它，也不该为了写注解而引入。
+		-->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>

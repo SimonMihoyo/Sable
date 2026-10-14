@@ -38,6 +38,9 @@
 		<sable.version>${project.version}</sable.version>
 		<mybatis-plus.version>3.5.7</mybatis-plus.version>
 		<jjwt.version>0.12.6</jjwt.version>
+		<!-- SpringDoc OpenAPI。2.6.x 是官方兼容矩阵中对应 Spring Boot 3.3.x 的版本线，
+		     不要跟着升到 2.7+/2.8+（那是给 Boot 3.4/3.5 用的） -->
+		<springdoc.version>2.6.0</springdoc.version>
 	</properties>
 
 	<dependencyManagement>
@@ -115,6 +118,13 @@
 				<groupId>io.jsonwebtoken</groupId>
 				<artifactId>jjwt-jackson</artifactId>
 				<version>${jjwt.version}</version>
+			</dependency>
+
+			<!-- 接口文档（OpenAPI 3 / Swagger UI），仅供 sable-app 引入 -->
+			<dependency>
+				<groupId>org.springdoc</groupId>
+				<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+				<version>${springdoc.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>

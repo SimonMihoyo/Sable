@@ -72,8 +72,31 @@ sable:
       - /auth/logout
       - /error
       - /favicon.ico
+      # 接口文档入口（SpringDoc）。本身不含业务数据，且前端联调时需要免认证访问；
+      # 生产环境请用 SABLE_OPENAPI_ENABLED=false 关掉文档，这两条随之失效。
+      - /v3/api-docs
+      - /v3/api-docs/**
+      - /swagger-ui.html
+      - /swagger-ui/**
+
+  # 跨域（对应 me.kirara.sable.config.WebConfig）
+  web:
+    cors:
+      # 允许的跨源来源，支持 [*] 端口通配。默认放开 localhost 任意端口，便于前端联调
+      # （架构文档把 dev server 写在 3000，Umi 4 默认 8000，写死端口必然对不上）。
+      # 生产环境务必用 SABLE_CORS_ALLOWED_ORIGIN_PATTERNS 覆盖为真实域名，不要沿用默认值。
+      allowed-origin-patterns: "${SABLE_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:[*],http://127.0.0.1:[*]}"
 
   # 定时任务
   task:
     # 清理已过期的令牌吊销记录（6 段 cron：秒 分 时 日 月 周），默认每天 03:30
     revocation-cleanup-cron: "0 30 3 * * *"
+
+# 接口文档（SpringDoc OpenAPI）—— 规范 /v3/api-docs，界面 /swagger-ui.html
+# 生产环境把 SABLE_OPENAPI_ENABLED 设为 false：合规系统不宜向未认证调用方
+# 公开全量接口清单（含各接口的字段形状），关闭后白名单里那两条也随之失去意义。
+springdoc:
+  api-docs:
+    enabled: ${SABLE_OPENAPI_ENABLED:true}
+  swagger-ui:
+    enabled: ${SABLE_OPENAPI_ENABLED:true}
