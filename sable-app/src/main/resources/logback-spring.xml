@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  日志输出规范 —— 对应排期 Sprint 1 第 6 项里的「日志规范」。
+
+  分工（别把级别写到这里）：
+    · 输出格式、落盘策略 → 本文件
+    · 日志级别           → application.yml / application-dev.yml
+  级别放在配置文件里，是为了能用环境变量临时覆盖而不用改包重启，
+  例如线上排查：LOGGING_LEVEL_ME_KIRARA_SABLE=debug。
+
+  日志目录由环境变量 SABLE_LOG_PATH 控制，默认 logs/（相对进程工作目录）。
+  容器部署时请把它指到挂载卷，否则日志随容器销毁而丢。
+
+  为什么用 springProfile 之外的纯 logback 写法：本文件只使用 logback 标准元素，
+  不使用 Spring Boot 特有的 <springProperty>，这样单元测试等非 Spring 上下文中
+  即使读到本文件也不会出现无法解析的元素。
+
+  本文件是全项目**唯一**的日志输出配置。不要在代码里写 System.out / printStackTrace，
+  也不要给 mybatis-plus 配 log-impl —— 那会绕过 SLF4J，使日志级别与输出目标全部失效。
+-->
+<configuration>
+
+    <property name="LOG_PATH" value="${SABLE_LOG_PATH:-logs}"/>
+
+    <!--
+      每行固定带上三个身份字段：
+        traceId  —— 一次请求一个标识（TraceIdFilter 分配，同时回写 X-Request-Id 响应头）
+        tenantId —— 令牌 tid 声明；系统级用户由 X-Tenant-Id 请求头兜底
+        userId   —— 令牌 userId 声明
+      三者都是空的，说明这行日志不属于任何请求（启动过程、定时任务），不是丢字段。
+    -->
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-}] [%X{tenantId:-}] [%X{userId:-}] %logger{36} - %msg%n"/>
+
+    <!-- 控制台：容器化部署时 stdout 是主通道，因此各环境都保留 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!--
+      文件：合规系统要求日志可按保留期追溯，因此同时落盘。
+      按天 + 单文件 100MB 滚动，压缩归档，保留 30 天且总量不超过 5GB。
+      保留期与总量上限是硬约束，不是缓冲值 —— 超限的旧文件会被删除。
+    -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/sable.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/sable.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!--
+      根级别 INFO。第三方库的噪音用它兜住；
+      本项目的级别在 application.yml 的 logging.level.me.kirara.sable 里单独设，
+      dev profile 会把它提到 DEBUG（SQL 语句随之出现在日志里）。
+    -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

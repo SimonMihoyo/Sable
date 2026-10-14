@@ -1,9 +1,11 @@
 package me.kirara.sable.web;
 
 import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.TraceContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
@@ -24,6 +26,7 @@ class TenantContextFilterTest {
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+        TraceContext.clear();
     }
 
     @Test
@@ -42,12 +45,18 @@ class TenantContextFilterTest {
     @DisplayName("令牌未给出租户时用请求头兜底（超管跨租户场景）")
     void headerFillsWhenTokenHasNoTenant() throws Exception {
         Long[] seen = {null};
+        String[] seenMdcTenantId = {null};
         filter.doFilter(request("1001"), new MockHttpServletResponse(),
-                (req, res) -> seen[0] = TenantContext.getTenantId());
+                (req, res) -> {
+                    seen[0] = TenantContext.getTenantId();
+                    seenMdcTenantId[0] = MDC.get(TraceContext.TENANT_ID);
+                });
 
         assertEquals(1001L, seen[0].longValue());
+        assertEquals("1001", seenMdcTenantId[0], "兜底得来的租户同样要进日志上下文");
         // 自己填的租户要自己清理
         assertNull(TenantContext.getTenantId());
+        assertNull(MDC.get(TraceContext.TENANT_ID), "日志上下文里的租户也要一并撤销");
     }
 
     @Test

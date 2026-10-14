@@ -9,6 +9,7 @@ import me.kirara.sable.common.BusinessException;
 import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.R;
 import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.TraceContext;
 import me.kirara.sable.common.UserContext;
 import me.kirara.sable.common.util.BearerTokens;
 import me.kirara.sable.system.auth.AuthProperties;
@@ -106,6 +107,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 线程池会复用线程，不清会串号
             UserContext.clear();
             TenantContext.clear();
+            // 日志上下文里的身份同理要撤掉；traceId 不属于本过滤器，由最外层的
+            // TraceIdFilter 在它自己的 finally 里清理。
+            TraceContext.setUserId(null);
+            TraceContext.setTenantId(null);
         }
     }
 
@@ -120,12 +125,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return false;
     }
 
-    /** 把令牌中的身份与租户写入上下文。 */
+    /**
+     * 把令牌中的身份与租户写入上下文。
+     *
+     * <p>业务上下文（{@link UserContext} / {@link TenantContext}）与日志上下文
+     * （{@link TraceContext}）同时写：前者供代码取用，后者让本请求后续的每一行日志
+     * 都带上"是谁、属于哪个租户"。日志上下文由 {@link TraceIdFilter} 统一清理，
+     * 这里只负责写入。</p>
+     */
     private void fillContext(JwtPayload payload) {
         UserContext.setUserId(payload.getUserId());
         UserContext.setUsername(payload.getUsername());
+        TraceContext.setUserId(payload.getUserId());
         if (payload.getTenantId() != null) {
             TenantContext.setTenantId(payload.getTenantId());
+            TraceContext.setTenantId(payload.getTenantId());
         }
     }
 

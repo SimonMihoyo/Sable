@@ -35,3 +35,7 @@ build/
 ### 本地 AI 协作笔记 ###
 # 内含本机路径与本地开发口令，仅作本机工作记录，不随仓库分发
 .workbuddy/
+
+### 运行日志 ###
+# logback-spring.xml 默认写到 logs/，属运行产物，不入库
+logs/

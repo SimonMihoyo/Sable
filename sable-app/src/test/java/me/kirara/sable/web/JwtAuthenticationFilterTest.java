@@ -6,6 +6,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletResponse;
 import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.TraceContext;
 import me.kirara.sable.common.UserContext;
 import me.kirara.sable.system.auth.AuthProperties;
 import me.kirara.sable.system.auth.JwtPayload;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
@@ -152,11 +154,15 @@ class JwtAuthenticationFilterTest {
         Long[] seenUserId = new Long[1];
         String[] seenUsername = new String[1];
         Long[] seenTenantId = new Long[1];
+        String[] seenMdcUserId = new String[1];
+        String[] seenMdcTenantId = new String[1];
         filter.doFilter(request("GET", PROTECTED_URI, "Bearer " + token), response,
                 (req, res) -> {
                     seenUserId[0] = UserContext.getUserId();
                     seenUsername[0] = UserContext.getUsername();
                     seenTenantId[0] = TenantContext.getTenantId();
+                    seenMdcUserId[0] = MDC.get(TraceContext.USER_ID);
+                    seenMdcTenantId[0] = MDC.get(TraceContext.TENANT_ID);
                 });
 
         assertEquals(42L, seenUserId[0].longValue());
@@ -164,9 +170,15 @@ class JwtAuthenticationFilterTest {
         assertEquals(1001L, seenTenantId[0].longValue());
         assertEquals(HttpServletResponse.SC_OK, response.getStatus());
 
+        // 日志上下文（MDC）里也要有身份，否则日志无法回答"这行是谁打的"
+        assertEquals("42", seenMdcUserId[0]);
+        assertEquals("1001", seenMdcTenantId[0]);
+
         // 线程会被复用，请求结束后上下文必须为空
         assertNull(UserContext.getUserId());
         assertNull(TenantContext.getTenantId());
+        assertNull(MDC.get(TraceContext.USER_ID));
+        assertNull(MDC.get(TraceContext.TENANT_ID));
     }
 
     @Test

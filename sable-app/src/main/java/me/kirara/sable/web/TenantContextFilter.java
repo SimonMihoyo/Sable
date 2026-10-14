@@ -5,6 +5,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
@@ -44,6 +45,8 @@ public class TenantContextFilter extends OncePerRequestFilter {
             if (filledFromHeader) {
                 // 只清理自己填进去的值；令牌填的由 JwtAuthenticationFilter 负责清理
                 TenantContext.clear();
+                // 日志上下文里的租户同步撤销，否则这条兜底路径填的值会留在 MDC 里
+                TraceContext.setTenantId(null);
             }
         }
     }
@@ -64,6 +67,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
         }
         try {
             TenantContext.setTenantId(Long.valueOf(tenantId.trim()));
+            TraceContext.setTenantId(Long.valueOf(tenantId.trim()));
             return true;
         } catch (NumberFormatException e) {
             log.warn("忽略非法的 {} 请求头: {}", TENANT_HEADER, tenantId);

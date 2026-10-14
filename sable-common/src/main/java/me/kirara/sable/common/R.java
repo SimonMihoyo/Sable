@@ -10,6 +10,10 @@ public class R<T> {
 
     private R() {
         this.timestamp = System.currentTimeMillis();
+        // traceId 取自日志上下文（由 TraceIdFilter 写入），语义是"这次请求在日志里的编号"：
+        // 调用方拿到响应后可以直接拿它去日志里定位同一次请求的全部记录。
+        // 非请求线程（启动过程、定时任务）构造的 R 没有它，会被 non_null 序列化策略略过。
+        this.traceId = TraceContext.getTraceId();
     }
 
     public static <T> R<T> ok() {

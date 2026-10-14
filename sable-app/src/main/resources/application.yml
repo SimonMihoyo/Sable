@@ -27,7 +27,11 @@ spring:
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    # 这里**不要**配 log-impl。MyBatis 在 classpath 上发现 SLF4J 时会自动走它，
+    # SQL 由 mapper 包的 logger 输出（dev profile 下是 DEBUG，生产是 INFO 即不打）。
+    # 一旦写死 org.apache.ibatis.logging.stdout.StdOutImpl，SQL 就绕过日志框架直接
+    # 打到 stdout：logging.level 管不住它、appender 也管不住它，生产环境关不掉，
+    # 而 SQL 语句里带着参数值 —— 对合规产品是不能接受的外泄面。
   global-config:
     banner: false
     db-config:
@@ -35,9 +39,15 @@ mybatis-plus:
       table-underline: true
   mapper-locations: classpath*:/mapper/**/*.xml
 
+# 日志：输出格式与落盘策略在 logback-spring.xml（同目录），这里只放级别。
+# 级别放在配置文件里，是为了能用环境变量临时覆盖而无需改包重启，例如线上排查：
+#   LOGGING_LEVEL_ME_KIRARA_SABLE=debug
+# 日志目录用环境变量 SABLE_LOG_PATH 控制（默认 logs/），由 logback 直接读取 ——
+# 刻意不在下面声明同名键，避免两处配置各说各话。
 logging:
   level:
-    me.kirara.sable: debug
+    # 本包默认 INFO。启用 dev profile 时会覆盖为 DEBUG，SQL 语句随之可见（见 application-dev.yml）。
+    me.kirara.sable: info
 
 # 认证配置（对应 me.kirara.sable.system.auth.AuthProperties）
 sable:
