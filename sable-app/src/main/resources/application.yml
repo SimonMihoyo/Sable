@@ -13,7 +13,21 @@ spring:
     name: Sable
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sable}
+    # ⚠️ 结尾的 stringtype=unspecified 不能删 —— 它决定 Java 的 String 以什么类型发给 PostgreSQL。
+    #
+    # pgjdbc 默认按 varchar 下发，而 PG **没有** varchar → jsonb 的隐式转换，于是所有写入
+    # JSONB 列的语句都直接失败：
+    #   column "permissions" is of type jsonb but expression is of type character varying
+    # unspecified 让参数不预设类型、改由 PG 按目标列推断，jsonb 列因此能正常写入。
+    #
+    # 覆盖范围是**全部** JSONB 列（schema 里共 9 处）：role.permissions、tenant.config、
+    # sys_audit_log.detail、alert_rule.config/notify_channels/notify_targets、
+    # alert_event.trigger_detail、assessment_item.evidence_files/auto_result ——
+    # 与之对应的 12 个 Java 字段都是裸 String，没有配 TypeHandler，全靠这个参数兜住。
+    #
+    # 租户连接池（TenantDataSourceRegistry）与 Flyway 的临时池都从这份 DataSourceProperties
+    # 派生，所以改这一处，public 池与所有租户池同时生效，不要只改其中一个。
+    url: "jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sable}?stringtype=unspecified"
     username: ${DB_USER:sable}
     password: ${DB_PASSWORD:sable}
     hikari:

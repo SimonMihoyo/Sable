@@ -2,7 +2,11 @@ package me.kirara.sable.system.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.validation.Valid;
+import me.kirara.sable.common.BusinessException;
+import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.R;
+import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.util.JsonArrays;
 import me.kirara.sable.system.dto.RolePermissionRequest;
 import me.kirara.sable.system.dto.RoleSaveRequest;
 import me.kirara.sable.system.entity.Role;
@@ -34,14 +38,28 @@ public class RoleController {
         return R.ok(roleService.list(new LambdaQueryWrapper<Role>().orderByDesc(Role::getCreatedAt)));
     }
 
+    /**
+     * 创建角色。
+     *
+     * <p>{@code role.tenant_id} 是 {@code NOT NULL REFERENCES tenant(id)} —— 角色是**租户内的**
+     * 资产，唯一约束 {@code uq_role_tenant_name} 就建在 {@code (tenant_id, name)} 上，
+     * 不同租户可以有同名角色。所以归属必须显式写入：漏掉它不会"退化成公共角色"，
+     * 而是直接撞 not-null 约束。</p>
+     *
+     * <p>租户取自访问令牌的 {@code tid}（见 {@code JwtAuthenticationFilter} 写入的
+     * {@link TenantContext}），缺失时报 {@code 40104}，与
+     * {@code TenantRequiredInterceptor} 对租户范围查询的兜底保持同一错误码。</p>
+     */
     @PostMapping
     public R<Role> create(@Valid @RequestBody RoleSaveRequest request) {
         Role role = new Role();
+        role.setTenantId(requireTenantId());
         role.setName(request.getName());
         role.setDisplayName(request.getDisplayName());
         role.setDescription(request.getDescription());
         role.setIsSystem(false);
-        role.setPermissions("[]");
+        // permissions 是 JSONB 列，只接受合法 JSON，统一经 JsonArrays 构造
+        role.setPermissions(JsonArrays.toJsonArray(List.of()));
         roleService.save(role);
         return R.ok(role);
     }
@@ -66,15 +84,46 @@ public class RoleController {
 
     @GetMapping("/{id}/permissions")
     public R<Role> permissions(@PathVariable Long id) {
-        return R.ok(roleService.getById(id));
+        Role role = roleService.getById(id);
+        if (role == null || role.getDeletedAt() != null) {
+            throw new BusinessException(ErrorCode.ROLE_NOT_FOUND);
+        }
+        return R.ok(role);
     }
 
+    /**
+     * 设置角色权限。
+     *
+     * <p>{@code role.permissions} 是 {@code JSONB} 列，只接受合法 JSON 文本。
+     * 必须经 {@link JsonArrays} 序列化后写入 —— 直接把权限标识拼成
+     * {@code String.join(",", ...)} 会得到 {@code data_source:read,audit_log:read}
+     * 这种既非合法 JSON 也无从解析的字符串，写库时被数据库直接拒绝。</p>
+     */
     @PutMapping("/{id}/permissions")
     public R<Void> setPermissions(@PathVariable Long id, @RequestBody RolePermissionRequest request) {
+        Role existing = roleService.getById(id);
+        if (existing == null || existing.getDeletedAt() != null) {
+            throw new BusinessException(ErrorCode.ROLE_NOT_FOUND);
+        }
         Role role = new Role();
         role.setId(id);
-        role.setPermissions(String.join(",", request.getPermissions() == null ? List.of() : request.getPermissions()));
+        role.setPermissions(JsonArrays.toJsonArray(request.getPermissions()));
         roleService.updateById(role);
         return R.ok();
+    }
+
+    /**
+     * 取当前请求的租户 ID。
+     *
+     * <p>与 {@code UserController#requireTenantId()} 同源：角色的归属必须在具体租户下确定。
+     * 这里只做兜底 —— 正常路径上租户已由 {@code JwtAuthenticationFilter} 从令牌写入
+     * {@link TenantContext}。</p>
+     */
+    private Long requireTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new BusinessException(ErrorCode.TENANT_CONTEXT_MISSING);
+        }
+        return tenantId;
     }
 }
