@@ -66,4 +66,69 @@ class JsonArraysTest {
 
         assertEquals(items, objectMapper.readValue(json, List.class));
     }
+
+    @Test
+    @DisplayName("解析紧凑形态 —— 本类自身写出的那种")
+    void parseCompactForm() {
+        assertEquals(List.of("data_source:read", "audit_log:export"),
+                JsonArrays.parseStringArray("[\"data_source:read\",\"audit_log:export\"]"));
+    }
+
+    @Test
+    @DisplayName("解析 PostgreSQL jsonb 读回的规范化形态（逗号后带空格）")
+    void parsePostgresForm() {
+        // 这是真正会从 role.permissions 读到的样子：jsonb 输出会规范化空白
+        assertEquals(List.of("a", "b", "c"), JsonArrays.parseStringArray("[\"a\", \"b\", \"c\"]"));
+    }
+
+    @Test
+    @DisplayName("空数组与带空白的空数组都解析为空列表")
+    void parseEmptyArray() {
+        assertEquals(List.of(), JsonArrays.parseStringArray("[]"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("  [ ]  "));
+    }
+
+    @Test
+    @DisplayName("null、空串与各种非法形态一律返回空列表，绝不抛异常")
+    void parseInvalidReturnsEmpty() {
+        assertEquals(List.of(), JsonArrays.parseStringArray(null));
+        assertEquals(List.of(), JsonArrays.parseStringArray(""));
+        assertEquals(List.of(), JsonArrays.parseStringArray("   "));
+        assertEquals(List.of(), JsonArrays.parseStringArray("null"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("a,b"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("[1,2]"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("[{\"a\":1}]"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("[\"a\""));
+        assertEquals(List.of(), JsonArrays.parseStringArray("[\"a\"]x"));
+        assertEquals(List.of(), JsonArrays.parseStringArray("[\"a\\qz\"]"));
+    }
+
+    @Test
+    @DisplayName("转义序列能还原，且与 Jackson 的解析结果逐项一致")
+    void parseEscapesAgreesWithJackson() throws Exception {
+        String tricky = "quote\" backslash\\ newline\ntab\t中文字符";
+        String json = JsonArrays.toJsonArray(List.of(tricky));
+
+        assertEquals(List.of(tricky), JsonArrays.parseStringArray(json));
+        // 两个独立的解析实现给出同一答案，才说明手写的那份没跑偏
+        assertEquals(objectMapper.readValue(json, List.class), JsonArrays.parseStringArray(json));
+    }
+
+    @Test
+    @DisplayName("写到读的往返保持一致（含中文、引号与斜杠）")
+    void roundTrip() {
+        List<String> items = List.of("数据源:读取", "审计日志:导出", "a b/c", "带\"引号\"的权限");
+        assertEquals(items, JsonArrays.parseStringArray(JsonArrays.toJsonArray(items)));
+    }
+
+    @Test
+    @DisplayName("含 null 元素的数组整体判为非法 —— 不产出带 null 的权限列表")
+    void nullElementIsRejectedAsWhole() {
+        // 写出去是 ["a",null,"b"]。解析器只认字符串元素，遇到裸 null 即判定整个输入不符合
+        // "字符串数组"形态，返回空列表。这是刻意的：与其把 null 塞进权限列表传给前端，
+        // 不如整条按"配置有问题"处理（调用方会记 WARN）。
+        String json = JsonArrays.toJsonArray(Arrays.asList("a", null, "b"));
+        assertEquals("[\"a\",null,\"b\"]", json);
+        assertEquals(List.of(), JsonArrays.parseStringArray(json));
+    }
 }
