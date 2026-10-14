@@ -54,7 +54,7 @@
 ```
 sable/
 ├── doc/                    设计文档与图表（需求 / 架构 / 数据库 / API / 排期）
-├── sable-app/              启动模块（含 application.yml 与 db/schema.sql）
+├── sable-app/              启动模块（含 application.yml、db/migration 迁移脚本、db/dev 开发种子数据）
 ├── sable-common/           公共基础
 ├── sable-system/           系统管理
 ├── sable-discovery/        数据资产发现
@@ -80,13 +80,22 @@ sable/
 
 ### 1. 初始化数据库
 
-```bash
-# 创建数据库
-createdb -U postgres sable
+只需要建一个空库。表结构、分区、审计哈希链函数等全部由 **Flyway** 在应用启动时自动创建
+（迁移脚本位于 `sable-app/src/main/resources/db/migration/`）：
 
-# 导入表结构、分区、审计哈希链函数等
-psql -U postgres -d sable -f sable-app/src/main/resources/db/schema.sql
+```bash
+createdb -U postgres sable
 ```
+
+启动应用即可，日志里会出现 `Successfully applied N migration(s)`。
+
+> **存量库接入**：若目标库里已经有表、但还没有 `flyway_schema_history`，
+> Flyway 会把现有结构记为 V1 基线然后继续往下走 —— 既不报错也不重建数据。
+> 该行为由 `spring.flyway.baseline-on-migrate` 控制，开关时机见 `application.yml` 里的说明。
+
+> **想直接看建表脚本**：`sable-app/src/main/resources/db/migration/V1__init_schema.sql`。
+> 它是**不可变基线**，一经应用就不能再编辑；后续任何结构变更都要新建 `V2__xxx.sql`。
+> 原因与做法见 `AGENTS.md` 第 4 节。
 
 ### 2. 配置数据库连接
 
@@ -108,11 +117,32 @@ psql -U postgres -d sable -f sable-app/src/main/resources/db/schema.sql
 
 # 运行启动模块
 ./mvnw -pl sable-app -am spring-boot:run
+
+# 本机开发推荐启用 dev profile：启动时自动写入演示租户/角色/账号，开箱即可登录
+./mvnw -pl sable-app -am spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-或在 IDE 中直接运行 `me.kirara.sable.SableApplication`（工程已附带 `.run/SableApplication.run.xml` 运行配置）。
+或在 IDE 中直接运行 `me.kirara.sable.SableApplication`（工程已附带 `.run/SableApplication.run.xml` 运行配置，其中已激活 `dev` profile）。
 
 服务默认监听 `http://localhost:8080`。
+
+### 4. 开发账号（dev profile）
+
+建表脚本只建结构、不插数据（生产库更不该带演示账号），所以**空库起来后是没有账号可登录的**。
+启用 `dev` profile 后，Flyway 会额外执行 `db/dev/R__dev_seed.sql`，
+写入 1 个演示租户、3 个预置角色和下面 3 个可直接登录的账号：
+
+| 用户名 | 密码 | 角色 | 说明 |
+|--------|------|------|------|
+| `alice` | `Sable@2026` | `SUPER_ADMIN` + `COMPLIANCE_OFFICER` | 主账号，租户内全部权限；一个用户挂两个角色，是多角色模型的活样本 |
+| `bob` | `Sable@2026` | `AUDITOR` | 只读，用来验证权限受限时的表现 |
+| `carol` | `Sable@2026` | `COMPLIANCE_OFFICER` | 读写但不含 `system:manage` |
+
+该脚本是**可重复迁移**（`R__` 前缀）：改动它就会重新执行一次，把这三个账号复位
+（密码还原、解锁、取消软删除）。因此改密码、连续失败锁定这类测试可以放心做。
+
+> ⚠️ **不要在生产环境启用 dev profile** —— 那会把一批密码公开的账号写进生产库。
+> 该文件也因此刻意放在 `db/dev/` 而不是 `db/migration/`：后者是所有环境都会扫描的路径。
 
 ---
 

@@ -19,6 +19,38 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
+  # 数据库迁移（Flyway）—— 迁移脚本位于 sable-app/src/main/resources/db/migration/
+  # 启动时自动执行未应用过的迁移；迁移在 Flyway 自己的事务里跑，
+  # PostgreSQL 的 DDL 可事务，因此单个迁移文件要么全部生效、要么整体回滚。
+  flyway:
+    enabled: true
+    # 正式迁移的扫描路径。这里**保持只扫描 db/migration** —— 该路径下的一切
+    # 所有环境都会执行，因此绝不允许出现演示账号之类的假数据。
+    # 本地开发想要"开箱即能登录"的账号，启用 dev profile 即可：
+    #   SPRING_PROFILES_ACTIVE=dev java -jar sable-app/target/...
+    # 它会把 db/dev/（种子数据，见 db/dev/R__dev_seed.sql）追加进来，
+    # 详见 application-dev.yml。
+    locations: classpath:db/migration
+    # 已应用迁移的校验和必须一致 —— 回头改 V1 会在这里被拦下并拒绝启动，不要关掉。
+    # ⚠️ 它只覆盖**真正执行过**迁移的库：以 baseline 方式接入的库（历史记录 type=BASELINE、
+    # checksum 为空）不参与比对，在那类库上改 V1 不会报错。**别把"没报错"当作"可以改"。**
+    validate-on-migrate: true
+    # 存量库接入开关：目标库里已有表、但还没有 flyway_schema_history 时，
+    # 把既有结构记为基线并跳过 V1 的执行；关掉它则会直接报
+    # "Found non-empty schema(s) but no schema history table" 拒绝启动。
+    #
+    # ⚠️ 这是**过渡期**开关。等所有环境（开发/测试/预发/生产）都接入过一次、
+    # 各自都建好了 flyway_schema_history，就把它设为 false。
+    # 否则将来一旦指向结构未知的库，Flyway 会"默认现状即基线"继续往下跑，
+    # 把本该报出来的结构漂移悄悄掩盖掉。
+    # 关闭方式：SABLE_FLYWAY_BASELINE_ON_MIGRATE=false
+    baseline-on-migrate: ${SABLE_FLYWAY_BASELINE_ON_MIGRATE:true}
+    # 基线版本就是 V1。别改成别的值 —— 改成 0 会让 V1 在已有表的库上重跑，
+    # 因 "relation already exists" 而失败。
+    baseline-version: 1
+    # 禁止 flyway clean（会清空整个目标库的库对象）。合规产品的库里
+    # 即便开发期也不该有一键清库的入口，需要重建时手工 DROP DATABASE。
+    clean-disabled: true
   jackson:
     default-property-inclusion: non_null
     date-format: yyyy-MM-dd HH:mm:ss
@@ -91,6 +123,41 @@ sable:
   task:
     # 清理已过期的令牌吊销记录（6 段 cron：秒 分 时 日 月 周），默认每天 03:30
     revocation-cleanup-cron: "0 30 3 * * *"
+
+  # 多租户（对应 me.kirara.sable.tenant.TenantSchemaProperties）
+  # 全库分两层：public 下 9 张公共表（应用级，每个库一次）+ tenant_{id} 下 12 张业务表
+  # （租户级，每个租户各一次）。业务连接由 TenantRoutingDataSource 按当前租户路由。
+  tenant:
+    # 租户级迁移脚本路径。**每个租户各执行一遍**，建的是 tenant_{id} 里的表；
+    # public 那 9 张走 spring.flyway.locations（classpath:db/migration）。两者必须分开：
+    # 混在同一个路径下，Flyway 会把业务表建到 public，之后租户请求会静默读到 public 那份数据。
+    migration-locations:
+      - classpath:db/tenant
+    # 启动时是否为库里已有的租户补齐 schema 与迁移。
+    # 默认关：生产环境的表结构变更应由发布流程显式触发，而不是每次重启都跑一遍 DDL。
+    # 开发环境由 dev profile 打开（见 application-dev.yml）—— 种子数据只写公共表，
+    # 不打开的话本地库重启后没有 tenant_1，业务接口一调就报 relation 不存在。
+    provision-on-startup: "${SABLE_TENANT_PROVISION_ON_STARTUP:false}"
+    # 每个租户连接池的最大连接数。池是**按租户分开**的（隔离靠连接自身的 currentSchema，
+    # 不靠"用完复位"），所以要按「租户数 × 本值 ≤ 数据库 max_connections」估，
+    # 不能照抄单库实例的 20。
+    pool-max-size: 5
+    # 每租户池的最小空闲连接。租户多时保持 0，免得空闲连接把数据库连接数占满。
+    pool-min-idle: 0
+    # 缺租户上下文却要访问租户数据时直接报错（错误码 40104），**不要关**。
+    # 关掉等于把跨租户读写的风险重新交还给"每个查询自觉"；只在排查误报时临时关。
+    fail-fast-without-tenant: true
+    # 哪些包下的 Mapper 属于"必须带租户"的范围 —— 按 MappedStatement 命名空间前缀判定，
+    # 不去正则解析 SQL（列名、字符串常量里出现同名词会误判）。
+    # me.kirara.sable.system 刻意不在名单里：那 9 张是公共表，登录与租户/用户管理
+    # 本来就不依赖租户上下文。
+    tenant-scoped-packages:
+      - me.kirara.sable.discovery
+      - me.kirara.sable.classify
+      - me.kirara.sable.audit
+      - me.kirara.sable.assessment
+      - me.kirara.sable.alert
+      - me.kirara.sable.report
 
 # 接口文档（SpringDoc OpenAPI）—— 规范 /v3/api-docs，界面 /swagger-ui.html
 # 生产环境把 SABLE_OPENAPI_ENABLED 设为 false：合规系统不宜向未认证调用方

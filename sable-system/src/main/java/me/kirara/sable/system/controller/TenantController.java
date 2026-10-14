@@ -42,7 +42,8 @@ public class TenantController {
         tenant.setContactName(request.getContactName());
         tenant.setContactEmail(request.getContactEmail());
         tenant.setContactPhone(request.getContactPhone());
-        tenantService.save(tenant);
+        // 走 service 而不是直接 save：除了插元数据，还要把这个租户的 schema 与业务表建起来
+        tenantService.create(tenant);
         return R.ok(tenant);
     }
 

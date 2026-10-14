@@ -91,7 +91,32 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public R<Void> handleUnknown(Exception ex, HttpServletRequest request) {
+        // 持久层里抛出的业务异常会被 MyBatis 逐层包装
+        // （BusinessException → PersistenceException → MyBatisSystemException），
+        // 直接兜底就会把一次明确的业务拒绝伪装成「系统内部错误」，让调用方无从判断。
+        // 因此先沿异常链找 BusinessException，找到就按它自己的错误码回应。
+        BusinessException business = businessCause(ex);
+        if (business != null) {
+            return handleBusiness(business, request);
+        }
         log.error("系统异常 [{}]", request.getRequestURI(), ex);
         return R.fail(ErrorCode.INTERNAL_ERROR);
+    }
+
+    /**
+     * 沿异常链查找 {@link BusinessException}。
+     *
+     * <p>限制层数是为了防御性地避免异常链异常（自引用）造成的死循环 —— 正常情况下
+     * 包装不会超过三层。</p>
+     */
+    private static BusinessException businessCause(Throwable ex) {
+        Throwable current = ex;
+        for (int depth = 0; current != null && depth < 10; depth++) {
+            if (current instanceof BusinessException business) {
+                return business;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 }

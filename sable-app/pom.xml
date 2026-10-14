@@ -74,6 +74,23 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!--
+			数据库迁移（Flyway）。版本不在此声明 —— 由 Spring Boot 父 pom 统一管理
+			（Boot 3.3.13 → Flyway 10.10.0），跟着 Boot 升级即可，不要钉死版本号。
+
+			⚠️ flyway-database-postgresql 是必需的，不是可选项：
+			Flyway 10 把各数据库的支持拆成了独立模块，flyway-core 本身不再内置
+			PostgreSQL 方言，只引 core 会在启动时报
+			"Unsupported Database: PostgreSQL 16.x"。
+		-->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>

@@ -1,178 +1,35 @@
--- Sablé 数据合规管理系统 — 数据库初始化脚本
--- 自动抽取自 doc/数据合规系统-数据库设计文档.md
+-- ============================================================================
+-- Sablé 数据合规管理系统 — 租户级基线迁移 V1（tenant_{id} schema）
+-- ============================================================================
 -- 目标数据库：PostgreSQL 14+
+--
+-- 【本文件与 db/migration/ 的分工】
+--
+--   db/migration/V1__init_schema.sql   应用级：public 下的 9 张公共表 + 加密/校验函数
+--   db/tenant/V1__tenant_schema.sql    租户级：tenant_{id} 下的 12 张业务表 ← 本文件
+--
+-- 本文件**不会被应用启动时的 Flyway 执行**（应用那条链路只扫 db/migration）。
+-- 它由 TenantSchemaProvisioner 在「建租户」时按租户逐个执行一次：
+--   数据库连接 → 目标 schema = tenant_{id} → locations = classpath:db/tenant → migrate()
+-- 每个租户 schema 里会留下自己的 flyway_schema_history，独立演进。
+--
+-- 【为什么语句一律不写 schema 前缀】
+-- Flyway 以 defaultSchema = tenant_{id} 运行，未限定名的对象落在该 schema 里。
+-- 一旦写成 public.xxx，建表就会跑到公共 schema 去；而写成 tenant_1.xxx 会让
+-- 本文件对所有租户失效。**保持全篇无前缀**是这份文件唯一要守的纪律。
+--
+-- 【新增租户表怎么办】
+-- 在本目录下按版本号往后加（V2__add_report_table.sql …）。已在跑的租户不会自动
+-- 跟上：租户 schema 的迁移只在「建租户」或「启动期补齐（sable.tenant.provision-on-startup）」
+-- 时执行，后者的 migrate() 会把这批新脚本一并应用。见 AGENTS.md「多租户」一节。
+--
+-- ⚠️ 本文件同样遵守「已提交不可改」的规则：它一旦被某个环境执行过，
+--    改动会让该环境的租户在下次 migrate 时报 checksum mismatch。
+-- ============================================================================
 
-CREATE TABLE public.tenant (
-    id              BIGSERIAL       PRIMARY KEY,
-    name            VARCHAR(128)    NOT NULL,
-    code            VARCHAR(32)     NOT NULL UNIQUE,          -- 租户编码，用于生成schema名
-    plan_type       VARCHAR(16)     NOT NULL DEFAULT 'BASIC', -- BASIC / PROFESSIONAL / ENTERPRISE
-    status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE',-- ACTIVE / SUSPENDED / EXPIRED
-    contact_name    VARCHAR(64),
-    contact_email   VARCHAR(128),
-    contact_phone   VARCHAR(32),
-    config          JSONB           NOT NULL DEFAULT '{}',    -- 租户级配置（配额、特性开关）
-    -- config 示例:
-    -- {
-    --   "max_data_sources": 10,
-    --   "max_users": 20,
-    --   "storage_quota_gb": 50,
-    --   "audit_log_retention_days": 180,
-    --   "features": {
-    --     "anomaly_detection": false,
-    --     "custom_rules": true,
-    --     "api_access": true
-    --   }
-    -- }
-    expired_at      TIMESTAMP,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMP,
-
-    CONSTRAINT chk_tenant_plan   CHECK (plan_type IN ('BASIC', 'PROFESSIONAL', 'ENTERPRISE')),
-    CONSTRAINT chk_tenant_status CHECK (status IN ('ACTIVE', 'SUSPENDED', 'EXPIRED'))
-);
-
-CREATE INDEX idx_tenant_status ON public.tenant (status) WHERE deleted_at IS NULL;
-
-CREATE TABLE public.sys_user (
-    id              BIGSERIAL       PRIMARY KEY,
-    username        VARCHAR(64)     NOT NULL UNIQUE,
-    password_hash   VARCHAR(256)    NOT NULL,                  -- BCrypt哈希
-    email           VARCHAR(128),
-    phone           VARCHAR(32),
-    display_name    VARCHAR(64),
-    avatar_url      VARCHAR(512),
-    status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE', -- ACTIVE / LOCKED / DISABLED
-    mfa_enabled     BOOLEAN         NOT NULL DEFAULT FALSE,
-    mfa_secret      VARCHAR(128),                              -- TOTP密钥（加密存储）
-    last_login_at   TIMESTAMP,
-    last_login_ip   VARCHAR(64),
-    login_fail_count INT            NOT NULL DEFAULT 0,
-    locked_until    TIMESTAMP,
-    password_changed_at TIMESTAMP   NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMP,
-
-    CONSTRAINT chk_user_status CHECK (status IN ('ACTIVE', 'LOCKED', 'DISABLED'))
-);
-
-CREATE INDEX idx_sys_user_email ON public.sys_user (email) WHERE deleted_at IS NULL;
-CREATE INDEX idx_sys_user_phone ON public.sys_user (phone) WHERE deleted_at IS NULL;
-
--- 密码历史 — 记录用户曾经使用过的密码哈希，用于阻止重复使用近期密码
--- （策略：不得与最近 N 次相同，N 由 sable.auth.password-history-size 配置，默认 3）
--- 追加写、不更新，故只有 changed_at 一个时间戳列，也没有 deleted_at
-CREATE TABLE public.password_history (
-    id              BIGSERIAL       PRIMARY KEY,
-    user_id         BIGINT          NOT NULL REFERENCES public.sys_user(id),
-    password_hash   VARCHAR(256)    NOT NULL,                   -- BCrypt哈希
-    changed_at      TIMESTAMP       NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_password_history_user ON public.password_history (user_id, changed_at DESC);
-
--- 令牌吊销表 — 登出 / 强制下线时按 jti 记一行，认证入口逐次比对本表
--- 为什么不用 iat：iat 只有秒级精度，同一秒内的两枚令牌无法区分，会误伤
--- 追加写、行不可变，故只有 revoked_at 一个时间戳列，也没有 deleted_at
--- 令牌自然过期后本表记录即失去意义，由定时任务清理（见 TokenRevocationCleanupJob）
-CREATE TABLE public.token_revocation (
-    id              BIGSERIAL       PRIMARY KEY,
-    user_id         BIGINT          REFERENCES public.sys_user(id),
-    jti             VARCHAR(64)     NOT NULL,                   -- JWT 标准声明 jti
-    token_type      VARCHAR(16)     NOT NULL,                   -- access / refresh
-    expires_at      TIMESTAMP       NOT NULL,                   -- 令牌自身过期时间
-    revoked_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    reason          VARCHAR(32)     NOT NULL DEFAULT 'LOGOUT',
-
-    CONSTRAINT uq_token_revocation_jti UNIQUE (jti),
-    CONSTRAINT chk_token_revocation_type CHECK (token_type IN ('access', 'refresh'))
-);
-
--- 清理任务按 expires_at 扫过期行
-CREATE INDEX idx_token_revocation_expires ON public.token_revocation (expires_at);
--- 按用户强制下线时按 user_id 查
-CREATE INDEX idx_token_revocation_user    ON public.token_revocation (user_id);
-
-CREATE TABLE public.role (
-    id              BIGSERIAL       PRIMARY KEY,
-    tenant_id       BIGINT          NOT NULL REFERENCES public.tenant(id),
-    name            VARCHAR(64)     NOT NULL,                   -- SUPER_ADMIN / COMPLIANCE_OFFICER / AUDITOR / DATA_STEWARD / VIEWER
-    display_name    VARCHAR(64)     NOT NULL,
-    description     VARCHAR(256),
-    is_system       BOOLEAN         NOT NULL DEFAULT FALSE,     -- 系统预置角色不可删除
-    permissions     JSONB           NOT NULL DEFAULT '[]',      -- 权限列表
-    -- permissions 示例:
-    -- [
-    --   "data_source:read", "data_source:write",
-    --   "audit_log:read", "audit_log:export",
-    --   "assessment:read", "assessment:write",
-    --   "report:read", "report:export",
-    --   "system:manage"
-    -- ]
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMP,
-
-    CONSTRAINT uq_role_tenant_name UNIQUE (tenant_id, name)
-);
-
-CREATE INDEX idx_role_tenant ON public.role (tenant_id) WHERE deleted_at IS NULL;
-
-CREATE TABLE public.tenant_user (
-    id              BIGSERIAL       PRIMARY KEY,
-    tenant_id       BIGINT          NOT NULL REFERENCES public.tenant(id),
-    user_id         BIGINT          NOT NULL REFERENCES public.sys_user(id),
-    role_id         BIGINT          NOT NULL REFERENCES public.role(id),
-    department      VARCHAR(64),                                -- 数据范围权限维度
-    status          VARCHAR(16)     NOT NULL DEFAULT 'ACTIVE',
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMP,
-
-    CONSTRAINT uq_tenant_user UNIQUE (tenant_id, user_id),
-    CONSTRAINT chk_tu_status CHECK (status IN ('ACTIVE', 'DISABLED'))
-);
-
-CREATE INDEX idx_tenant_user_tenant ON public.tenant_user (tenant_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_tenant_user_user   ON public.tenant_user (user_id)  WHERE deleted_at IS NULL;
-
-CREATE TABLE public.sys_audit_log (
-    id              BIGSERIAL       PRIMARY KEY,
-    tenant_id       BIGINT,                                     -- 可为NULL（系统级操作）
-    user_id         BIGINT,
-    user_name       VARCHAR(64),
-    module          VARCHAR(32)     NOT NULL,                   -- TENANT / USER / ROLE / SYSTEM / CONFIG
-    action          VARCHAR(32)     NOT NULL,                   -- CREATE / UPDATE / DELETE / LOGIN / LOGOUT / EXPORT
-    target_type     VARCHAR(64),                                -- 操作对象类型
-    target_id       BIGINT,                                     -- 操作对象ID
-    detail          JSONB,                                      -- 变更详情（diff）
-    source_ip       VARCHAR(64),
-    user_agent      VARCHAR(256),
-    result          VARCHAR(16)     NOT NULL DEFAULT 'SUCCESS',
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT chk_sys_audit_result CHECK (result IN ('SUCCESS', 'FAILURE'))
-);
-
-CREATE INDEX idx_sys_audit_tenant  ON public.sys_audit_log (tenant_id, created_at);
-CREATE INDEX idx_sys_audit_user    ON public.sys_audit_log (user_id, created_at);
-CREATE INDEX idx_sys_audit_time    ON public.sys_audit_log (created_at);
-
-CREATE TABLE public.sys_config (
-    id              BIGSERIAL       PRIMARY KEY,
-    config_group    VARCHAR(64)     NOT NULL,                   -- 配置分组
-    config_key      VARCHAR(128)    NOT NULL,
-    config_value    TEXT,
-    value_type      VARCHAR(16)     NOT NULL DEFAULT 'STRING',  -- STRING / NUMBER / BOOLEAN / JSON
-    description     VARCHAR(256),
-    is_encrypted    BOOLEAN         NOT NULL DEFAULT FALSE,
-    created_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP       NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT uq_config_group_key UNIQUE (config_group, config_key)
-);
+-- ============================================================
+-- 一、数据发现域（数据源 → 库 → 表 → 字段 四级资产树）
+-- ============================================================
 
 CREATE TABLE data_source (
     id              BIGSERIAL       PRIMARY KEY,
@@ -262,6 +119,17 @@ CREATE INDEX idx_column_table     ON db_column (table_id);
 CREATE INDEX idx_column_sensitivity ON db_column (sensitivity) WHERE sensitivity IS NOT NULL;
 CREATE INDEX idx_column_rule      ON db_column (matched_rule_id) WHERE matched_rule_id IS NOT NULL;
 
+-- 即使应用层已做 Schema 隔离，额外增加 RLS 作为兜底（对应设计文档「RLS 兜底」一节）。
+-- ⚠️ 请注意本行**当前是空转的**：只 ENABLE 而没有任何 POLICY，配合"以库属主身份连接"
+--    正好等于不设防（表属主与超级用户不受 RLS 约束）。它真正生效要等到引入受限应用角色
+--    （app_user + FORCE ROW LEVEL SECURITY + 按 current_schema() 写 POLICY）那一天。
+--    保留在这里是为了不丢掉设计意图，**不要把它当作已经有了行级兜底**。
+ALTER TABLE db_column ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 二、分类分级域
+-- ============================================================
+
 CREATE TABLE classify_rule (
     id              BIGSERIAL       PRIMARY KEY,
     name            VARCHAR(128)    NOT NULL,
@@ -288,7 +156,10 @@ CREATE TABLE classify_rule (
 CREATE INDEX idx_rule_category ON classify_rule (category) WHERE deleted_at IS NULL;
 CREATE INDEX idx_rule_status   ON classify_rule (status, priority DESC) WHERE deleted_at IS NULL;
 
--- 按月分区，支持高性能写入和历史数据管理
+-- ============================================================
+-- 三、审计域（按月分区）
+-- ============================================================
+
 CREATE TABLE audit_log (
     id              BIGSERIAL,
     user_id         BIGINT          NOT NULL,
@@ -324,7 +195,34 @@ CREATE TABLE audit_log_2026_02 PARTITION OF audit_log
     FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
 CREATE TABLE audit_log_2026_03 PARTITION OF audit_log
     FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
--- ... 后续分区由定时任务自动创建
+
+-- ⚠️ 已挂的分区不覆盖当下时间（今天是 2026-10），也就是说**此刻往 audit_log 写入会失败**
+--    （no partition of relation "audit_log" found for row）。设计文档 §6.1 的方案是
+--    「定时任务每月25号自动创建下月分区」，该任务尚未实现，所以下面这段是唯一的分区来源：
+--    它在**每次租户迁移时**执行一遍，为本租户补建"下个月"的分区。
+--    这只是权宜之计 —— 一个租户补到一个月的分区，之后仍会断。真正的修法（补一个 DEFAULT
+--    分区，或把月度任务做出来）需要单独排期，本次多租户改造**刻意不顺手改语义**。
+DO $$
+DECLARE
+    next_month_start DATE := DATE_TRUNC('month', NOW()) + INTERVAL '1 month';
+    next_month_end   DATE := DATE_TRUNC('month', NOW()) + INTERVAL '2 months';
+    partition_name   TEXT := 'audit_log_' || TO_CHAR(next_month_start, 'YYYY_MM');
+BEGIN
+    -- 判断存在性必须**同时**限定 schema：原写法只比 relname，第一个租户建过之后
+    -- 其余租户就会全部被跳过，各自缺分区。租户场景下这是必踩的坑。
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = partition_name
+          AND n.nspname = current_schema()
+    ) THEN
+        EXECUTE format(
+            'CREATE TABLE %I PARTITION OF audit_log FOR VALUES FROM (%L) TO (%L)',
+            partition_name, next_month_start, next_month_end
+        );
+    END IF;
+END $$;
 
 -- 索引（每个分区自动继承）
 CREATE INDEX idx_audit_user_time   ON audit_log (user_id, created_at DESC);
@@ -333,6 +231,10 @@ CREATE INDEX idx_audit_target      ON audit_log (target_desc);
 CREATE INDEX idx_audit_level       ON audit_log (target_level) WHERE target_level IS NOT NULL;
 CREATE INDEX idx_audit_ip          ON audit_log (source_ip);
 CREATE INDEX idx_audit_hash        ON audit_log (hash);
+
+-- ============================================================
+-- 四、告警域
+-- ============================================================
 
 CREATE TABLE alert_rule (
     id              BIGSERIAL       PRIMARY KEY,
@@ -379,6 +281,10 @@ CREATE TABLE alert_event (
 CREATE INDEX idx_alert_event_status ON alert_event (status, created_at DESC);
 CREATE INDEX idx_alert_event_rule   ON alert_event (rule_id, created_at DESC);
 CREATE INDEX idx_alert_event_time   ON alert_event (created_at DESC);
+
+-- ============================================================
+-- 五、合规评估域
+-- ============================================================
 
 CREATE TABLE assessment (
     id              BIGSERIAL       PRIMARY KEY,
@@ -441,6 +347,10 @@ CREATE INDEX idx_item_assessment ON assessment_item (assessment_id);
 CREATE INDEX idx_item_status     ON assessment_item (status) WHERE status != 'PASSED';
 CREATE INDEX idx_item_assignee   ON assessment_item (assignee_id) WHERE assignee_id IS NOT NULL;
 
+-- ============================================================
+-- 六、扫描任务与文件
+-- ============================================================
+
 CREATE TABLE scan_task (
     id              BIGSERIAL       PRIMARY KEY,
     name            VARCHAR(128)    NOT NULL,
@@ -485,125 +395,14 @@ CREATE TABLE attachment (
 CREATE INDEX idx_attachment_biz ON attachment (biz_type, biz_id) WHERE deleted_at IS NULL;
 
 -- ============================================================
--- 【运维片段】以下为定期巡检查询，不属于初始化 DDL，故注释保留。
--- 注意：pg_stat_user_indexes 的列名是 relname / indexrelname（不是 tablename / indexname），
---       且原写法会因列名不存在直接报错；如需执行请复制出去单独跑。
+-- 【待办】本 schema 里还缺 report / report_schedule 两张表
 -- ============================================================
--- -- 定期分析索引使用情况（建议每周执行）
--- SELECT
---     schemaname, relname AS tablename, indexrelname AS indexname,
---     idx_scan,         -- 索引扫描次数
---     idx_tup_read,     -- 索引读取行数
---     idx_tup_fetch     -- 索引返回行数
--- FROM pg_stat_user_indexes
--- ORDER BY idx_scan ASC;
+-- sable-report 模块的 ReportMapper / ReportScheduleMapper 与对应实体都存在，
+-- 但数据库设计文档 §3.2 没有给出这两张表的定义，V1 里也没有 ——
+-- 一旦有代码真的查它们，会得到 "relation \"report\" does not exist"。
+-- 补表需要先确定字段（对外报告清单、导出记录、调度配置），属于独立的一步，
+-- 本次多租户改造不代作决定。
 --
--- -- 识别未使用的索引（idx_scan = 0 且存在超过7天）
--- -- 注意：需结合 pg_stat_statements 综合判断
---
--- -- 索引膨胀检查
--- SELECT
---     schemaname, relname AS tablename, indexrelname AS indexname,
---     pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
--- FROM pg_stat_user_indexes
--- ORDER BY pg_relation_size(indexrelid) DESC
--- LIMIT 20;
-
--- ============================================================
--- 【模板】租户 Schema 创建流程（按租户逐个执行，不属于本脚本）
--- 下方语句中的 {id} 是租户 ID 占位符，仅为模板示意：
--- {} 不是合法的 SQL 标识符，直接执行会语法报错，故此处保留为注释。
--- 实际使用时替换为具体租户 ID（如 tenant_1），或由应用/Flyway 按租户生成。
--- ============================================================
--- 1. 创建租户 Schema
--- CREATE SCHEMA tenant_{id};
-
--- 2. 在租户 Schema 中创建所有业务表
--- （通过Flyway迁移脚本自动执行）
-
--- 3. 授权（应用用户使用受限权限）
--- GRANT USAGE ON SCHEMA tenant_{id} TO app_user;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tenant_{id} TO app_user;
-
--- 由定时任务（pg_cron 或应用层调度器）每月执行
-DO $$
-DECLARE
-    next_month_start DATE := DATE_TRUNC('month', NOW()) + INTERVAL '1 month';
-    next_month_end   DATE := DATE_TRUNC('month', NOW()) + INTERVAL '2 months';
-    partition_name   TEXT := 'audit_log_' || TO_CHAR(next_month_start, 'YYYY_MM');
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_class WHERE relname = partition_name
-    ) THEN
-        EXECUTE format(
-            'CREATE TABLE %I PARTITION OF audit_log FOR VALUES FROM (%L) TO (%L)',
-            partition_name, next_month_start, next_month_end
-        );
-    END IF;
-END $$;
-
--- 使用 pgcrypto 模块
--- 启用扩展
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- 加密函数
-CREATE OR REPLACE FUNCTION fn_encrypt_data(plain_data TEXT, key TEXT)
-RETURNS BYTEA AS $$
-    SELECT pgp_sym_encrypt(plain_data, key);
-$$ LANGUAGE SQL IMMUTABLE;
-
--- 解密函数
-CREATE OR REPLACE FUNCTION fn_decrypt_data(encrypted_data BYTEA, key TEXT)
-RETURNS TEXT AS $$
-    SELECT pgp_sym_decrypt(encrypted_data, key);
-$$ LANGUAGE SQL IMMUTABLE;
-
--- 禁止 UPDATE / DELETE（通过受限应用角色控制）
--- 注意：app_user 角色当前既未在本脚本中创建，应用也默认以库属主身份连接，
--- 故以下授权暂时不生效，待「多租户 + 受限应用角色」落地时再启用（需超级用户创建角色）。
--- REVOKE UPDATE, DELETE ON audit_log FROM app_user;
--- GRANT INSERT, SELECT ON audit_log TO app_user;
-
--- 哈希链校验函数
-CREATE OR REPLACE FUNCTION fn_verify_hash_chain(
-    p_start_time TIMESTAMP,
-    p_end_time   TIMESTAMP
-) RETURNS TABLE (
-    id          BIGINT,
-    created_at  TIMESTAMP,
-    is_valid    BOOLEAN,
-    error_desc  TEXT
-) AS $$
-DECLARE
-    rec         RECORD;
-    prev_hash   VARCHAR(64) := '0000000000000000000000000000000000000000000000000000000000000000';
-    expected    VARCHAR(64);
-BEGIN
-    FOR rec IN
-        SELECT * FROM audit_log
-        WHERE audit_log.created_at BETWEEN p_start_time AND p_end_time
-        ORDER BY audit_log.created_at, audit_log.id
-    LOOP
-        expected := encode(sha256(convert_to(
-            rec.id || rec.user_id || rec.operation || rec.target_desc ||
-            rec.source_ip || rec.result || rec.created_at || prev_hash,
-            'UTF-8'
-        )), 'hex');
-
-        IF rec.hash != expected THEN
-            RETURN QUERY SELECT rec.id, rec.created_at, FALSE,
-                'Hash mismatch: expected ' || expected || ', got ' || rec.hash;
-        ELSE
-            RETURN QUERY SELECT rec.id, rec.created_at, TRUE, NULL;
-        END IF;
-
-        prev_hash := rec.hash;
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
--- 即使应用层已做Schema隔离，额外增加RLS作为兜底
-ALTER TABLE db_column ENABLE ROW LEVEL SECURITY;
-
--- 确保只能访问当前租户Schema的数据（通过search_path隐式保证）
--- RLS主要防止代码bug导致的跨租户访问
+-- 【模板】受限应用角色的授权（等引入 app_user 后启用）
+-- GRANT USAGE ON SCHEMA <本 schema> TO app_user;
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA <本 schema> TO app_user;

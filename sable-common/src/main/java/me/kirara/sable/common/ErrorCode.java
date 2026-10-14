@@ -22,6 +22,10 @@ public enum ErrorCode {
     TENANT_NOT_FOUND(40101, "租户不存在"),
     TENANT_DISABLED(40102, "租户已停用"),
     TENANT_QUOTA_EXCEEDED(40103, "租户配额超限"),
+    // 请求要访问租户数据，但当前上下文里没有租户 —— 属于代码缺陷而非用户输入问题。
+    // 之所以要显式报错：没有这条兜底，查询会落到 public schema 去找同名表，
+    // 找不到就直接报 "relation does not exist"，甚至（表同名时）读到别的租户的数据。
+    TENANT_CONTEXT_MISSING(40104, "缺少租户上下文"),
 
     // 数据源 40201-40299
     DATASOURCE_NOT_FOUND(40201, "数据源不存在"),

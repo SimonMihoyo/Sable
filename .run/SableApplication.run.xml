@@ -2,6 +2,10 @@
   <configuration default="false" name="SableApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot" nameIsGenerated="true">
     <module name="sable-app" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="me.kirara.sable.SableApplication" />
+    <!-- 激活 dev profile：Flyway 会额外执行 db/dev/R__dev_seed.sql，
+         本地库开箱即有可登录的演示账号（见 Readme「开发账号」）。
+         若某个库不该写入演示数据，把这一行删掉或改成别的 profile 名。 -->
+    <option name="ACTIVE_PROFILES" value="dev" />
     <method v="2">
       <option name="Make" enabled="true" />
     </method>
