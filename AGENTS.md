@@ -111,6 +111,10 @@ me.kirara.sable.<module>
 - 业务异常抛 `BusinessException`：
   - 命中已有错误码 → `throw new BusinessException(ErrorCode.AUTH_FAILED);`
   - 需要自定义文本 → `throw new BusinessException(code, "消息");`
+- **一个语义只对应一个错误码，不要在调用点"借码"。** 同一个条件在不同类里各写一份判断，
+  迟早分叉出不同的码（历史上"请求没带租户"就有两份实现：`UserController` 报 40101 还自带
+  一段自定义文本、`RoleController` 报 40104，客户端无从分辨）。这类"取不到就抛"的通用判定
+  一律收口成**唯一出口方法**，例如需要租户就调 `TenantContext.requireTenantId()`。
 - **新增错误码**须落在本模块号段（40001 起，按模块每 100 一段，见 `ErrorCode`），不得复用或跳段，且消息用中文。
 - 不要自己写 `try/catch` 返回错误 —— `GlobalExceptionHandler` 已统一兜底。
 
@@ -189,12 +193,62 @@ me.kirara.sable.<module>
   **必须带租户上下文**。漏带会得到错误码 **40104**，而不是静默的跨租户数据 ——
   这是 `TenantRequiredInterceptor` 的职责，不要关 `sable.tenant.fail-fast-without-tenant`。
   `sable-system` 相反：登录、租户与用户管理**本来就不该**依赖租户上下文。
+- **40104 与 40101 是两件事，别因为都在租户号段就合并**：
+  - `40104 TENANT_CONTEXT_MISSING` = **请求没带租户上下文**。调用姿势问题（链路漏了租户、
+    或客户端没带 `X-Tenant-Id`），属服务端缺陷。需要租户时一律走
+    `TenantContext.requireTenantId()`，它是这个语义的**唯一出口**。
+  - `40101 TENANT_NOT_FOUND` = **要找的那个租户不存在**（或已软删）。请求内容问题，
+    客户端该提示"租户不存在"，参考 `TenantController#detail`。
+  - 类比 HTTP：前者像 `401`（没带凭证），后者像 `404`（资源不存在）。
+- 租户上下文缺失时**不要**各处自己写 `TenantContext.getTenantId() == null` 判断 —— 统一用
+  `TenantContext.requireTenantId()`，否则就是上一条说的"借码"。
 - 隔离靠**连接自身的 `currentSchema`**（`TenantRoutingDataSource` + 每租户一个连接池），
   不靠会话级 `search_path`。设计文档 §5.2 给出的
   `jdbcTemplate.execute("SET search_path TO ...")` 样例**在本项目中是错的**：那条连接多半不是
   MyBatis 随后执行 SQL 用的那一条，还容易污染池里连接状态（串租户的来源）——**不要照抄**。
 - 连接池**按租户分开**，改 `sable.tenant.pool-max-size` 前先估
   「租户数 × 本值 ≤ 数据库 `max_connections`」。
+
+---
+
+## 3.9 前端（`sable-admin/`）
+
+前端工程与 Java 模块**平级，但不在 Maven 反应堆里**（`pom.xml` 不包含它，`./mvnw` 也不会碰它）。
+技术栈见架构文档 §3.2 —— **已获批**，取的是官方 Ant Design Pro **v6.0.3** 模板
+（React 19 + antd 6 + Umi Max 4）。铁律 1 里"不引入前端框架"指的是**不要另起炉灶**，
+不是禁止在这个工程里干活；但**新增第三方依赖仍然要先提出来**。
+
+改动前端时的约定：
+
+1. **路径统一带 `/api` 前缀**，后端接口本身是**裸路径**（没有 `/api` 也没有 `/api/v1`）。
+   `config/proxy.ts` 在开发环境剥掉前缀，生产由 Nginx 处理 —— 所以别在业务代码里写
+   `baseURL`，也别给某个接口单独特判前缀。
+2. **`R<T>` 的成功码是 `0`**，与后端一致（见 §3.3）。业务失败走 **HTTP 200 + 非 0 code**，
+   认证失败走 **HTTP 401 + R 体**。判断成败一律看 `code`，**不要只看 HTTP 状态**。
+3. **令牌存储分工不可随意改**：`accessToken` 只驻内存、`refreshToken` 落 `localStorage`。
+   所有"会话结束"的路径都必须收口到 `clearTokens()`——分散清理必然出现
+   "清了 access 忘了 refresh"，表现为"点了登出、刷新页面又是登录态"。
+4. **刷新会签发一对全新令牌，但不会吊销旧的那一个**。`AuthServiceImpl.refresh()` 校验传入的
+   刷新令牌（有效期 / 类型 / 用户 / 是否被吊销 / 账号可用）后签发新的一对，**不吊销传入的** ——
+   实测同一个 `refreshToken` 连刷两次都返回 `code=0`。所以：调用方应整体覆盖两个令牌
+   （否则本地那份不是最新的），但**不要**据此推断"并发刷新会互相作废、用户会被踢下线"。
+   并发刷新在客户端收敛为一次（`src/requestErrorConfig.ts` 里那个共享 Promise）是为了
+   别重复签发 N-1 对令牌、也别让"最终存下哪一个"变得不确定。
+   真正刷新失败只有三种：刷新令牌过期、已被登出吊销、账号被停用/锁定。
+5. **请求拦截器必须设 `validateStatus: () => true`**。去掉它，axios 会把 401 直接 reject，
+   响应拦截器根本看不到，自动续期永远不触发。
+   同时也**不要**在响应拦截器里把 `40003`（令牌非法/缺失）排除在"可刷新"之外：
+   刷新页面后内存里的 accessToken 必为空，首屏那个 `/me` 就是以 `401 + 40003「缺少访问令牌」`
+   被拒的 —— 它恰恰最需要走刷新，否则每次刷新页面都会被踢回登录页。
+6. **接口类型定义以 `src/services/sable/typings.d.ts` 为准，不以 API 文档为准** ——
+   该文档此前多处是"想当然"（登录响应多写了 `tokenType` 与 `user`，`/me` 的 `roles` 写成对象数组）。
+   发现不一致时改文档，别改类型去迁就文档。
+7. **`src/access.ts` 是显示控制，不是安全边界**。后端接口级鉴权尚未落地
+   （见 §6），藏菜单挡不住直接调接口。**不要**因为界面藏起来了就把某功能当成"已受保护"。
+8. 菜单名、页面文案**直接写中文**，不再走 `menu.xxx` 的 i18n 间接层 —— 只有 zh-CN 一份语言包，
+   多一层 key 只会让"页面上显示什么"多绕一道。
+9. 模板自带的**外链与埋点一律去掉**（日志中已清）：Google Analytics、阿里云 CDN 的 logo /
+   背景图 / 字体。合规产品不该在页面里向第三方域名发起请求。新增视觉资源前先确认这一点。
 
 ---
 
@@ -332,6 +386,10 @@ curl -s --noproxy '*' -X POST http://localhost:18080/auth/login \
   租户请求会静默读到公共 schema 的那份数据 —— 表现是一切正常，实际没有隔离。
 - 真实验证"缺租户即报错"：把某个业务接口的令牌里 `tid` 声明去掉（或直接用一个不带租户的
   令牌访问），期望得到业务错误码 `40104` 而不是 `500` 或空列表。
+- 顺带确认**两个租户错误码没有混**：`GET /system/tenants/999999` 应得 `40101`（租户不存在），
+  而"不带 `tid` 的令牌调需要租户的写接口"（如 `POST /system/roles`）应得 `40104`（缺上下文）。
+  两者若返回同一个码、或 `GET /system/tenants/{id}` 对不存在的租户返回 `code:0` + `data:null`，
+  说明又有人把判定写回了调用点 —— 见 §3.3 与 §3.8。
 
 > **⚠️ 报错 `Unable to find a single main class from the following candidates [SableApplication 2, SableApplication]` 时**：
 > 本仓库位于会被云盘（iCloud / OneDrive 等）同步的目录下，同步服务会在 `target/` 里生成 `Xxx 2.class`、`Xxx 3.class`
@@ -373,6 +431,52 @@ curl -s --noproxy '*' -X POST http://localhost:18080/alert/rules \
   内容是合法 JSON）。目前 `AlertController.createRule` 直接透传 `request.getConfig()` 不校验，
   传非法 JSON 会得到 `code=1 系统内部错误` —— 属已知待修项。
 
+### 5.5 验证前端（改动 `sable-admin/` 后必做）
+
+```bash
+cd sable-admin
+
+# 1. 类型检查 —— 用不了 `tsc` 报"@umijs/max 没有导出成员"时，先跑 setup 生成类型
+npx max setup            # 生成 src/.umi/，@umijs/max 的类型声明全靠它
+npx tsc --noEmit
+
+# 2. 单元测试
+npx vitest run
+
+# 3. 生产构建
+npx max build
+```
+
+**装依赖时的两个坑（本机必踩，与网络无关）**：
+
+- 沙箱把 `NODE_OPTIONS` 指向了一个文件系统 shim（`node-language-shim.cjs`），npm 在 `reify`
+  阶段的成千上万次 `rename` 都经 IPC 转发，最后必然超时失败（
+  `CODEBUDDY_BROKER_OUTCOME_UNKNOWN: Broker request timed out`）。**报错长得像网络问题，其实不是** ——
+  报错前依赖已经全下到缓存里了。用
+  `env -u NODE_OPTIONS -u HTTP_PROXY -u HTTPS_PROXY npm install` 才能装上。
+- `HTTP_PROXY` 会让 npm / curl 访问本机服务时走代理。访问 localhost 一律加 `--noproxy '*'`。
+
+**联调起法**（两个都要起）：
+
+```bash
+# 后端：默认端口要和 config/proxy.ts 的 target 对上（现为 8080）
+SPRING_PROFILES_ACTIVE=dev java -jar sable-app/target/sable-app-0.0.1-SNAPSHOT.jar --server.port=8080
+
+# 前端：Umi 4 默认 8000
+cd sable-admin && npm run dev
+```
+
+验证"代理是否真的通了"，直接打前端端口而不是后端端口：
+
+```bash
+curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"Sable@2026"}'
+```
+
+返回 `code=0` 且带 `accessToken` 就说明 `/api` 前缀被正确剥掉并转发到了后端。
+拿到令牌后再打 `http://localhost:8000/api/system/users/me`，确认 `roles` / `permissions` 有值。
+
 ---
 
 ## 6. 当前状态与禁区
@@ -383,6 +487,21 @@ curl -s --noproxy '*' -X POST http://localhost:18080/alert/rules \
 - 大量 `// TODO` 是**有意保留**的，不要一次性批量"实现"，除非被明确要求。
 - 改动前先读目标文件现状，**改动后不要改变未涉及的行为**。
 
+### 已知缺口（不要误当成"已实现"）
+
+> 这几条都不影响编译、也不会让测试变红，只会在真实使用中暴露 —— 排查时优先怀疑这里。
+
+- **接口级鉴权尚未落地**：全项目零 `@PreAuthorize` / `@Secured` / `GrantedAuthority`，
+  也没有权限码字典（`role.permissions` 是自由字符串）。实测用 AUDITOR（`bob`）的令牌
+  调用权限矩阵标 ❌ 的 `/system/tenants`、`/system/users`、`/system/roles`，**全部 200 + code 0 返回数据**。
+  也就是说：**当前任何已登录用户都是超级管理员**。前端按 `roles` 藏菜单只是"看不见"而非"进不去"。
+- **RLS 是空转**：`tenant_{id}` 下的表虽然 `ENABLE ROW LEVEL SECURITY`，但没有 POLICY、
+  对表属主也不生效。**它不是隔离手段**，真正的隔离靠 schema 路由（§3.8）。
+- **结构化 JSON 日志未做**；集中日志平台与访问日志也未做。
+- `report` / `report_schedule` 两张表缺失（`sable-report` 已有实体与 Mapper）。
+- `audit_log` 的分区只补了"下个月"，且**无分区时写入会直接失败**（权宜之计）。
+- 租户被删除时，它的连接池不会被关闭。
+
 ---
 
 ## 7. 提交前自检清单
@@ -392,6 +511,7 @@ curl -s --noproxy '*' -X POST http://localhost:18080/alert/rules \
 - [ ] DTO / 实体为手写 getter/setter，未用 Lombok
 - [ ] Controller 返回 `R<T>`，异常走 `BusinessException`
 - [ ] 新错误码落在本模块号段且为中文
+- [ ] 没有"借码"：同一个语义只有一处判定（如租户上下文缺失统一走 `TenantContext.requireTenantId()`）
 - [ ] 表结构变更已**新增**迁移脚本（未改动任何已有迁移文件）并同步数据库设计文档
 - [ ] 表结构变更写在了**正确的那条迁移路径**上（公共表 `db/migration/`、业务表 `db/tenant/`），
       且租户脚本里没有 schema 前缀
@@ -401,6 +521,13 @@ curl -s --noproxy '*' -X POST http://localhost:18080/alert/rules \
 - [ ] 日志走 SLF4J，没有 `System.out`，没有给 mybatis-plus 配 `log-impl`
 - [ ] `./mvnw -q -DskipTests compile` 通过
 - [ ] 没有改动与本任务无关的文件
+
+**动了 `sable-admin/` 时额外确认：**
+
+- [ ] `npx tsc --noEmit`、`npx vitest run`、`npx max build` 三项都过（见 §5.5）
+- [ ] 新增接口调用走 `/api` 前缀，且判断成败看 `R.code` 而不是 HTTP 状态（见 §3.9）
+- [ ] 没有向第三方域名引资源（字体 / 图片 / 埋点）—— 合规产品页面不应发起这类请求
+- [ ] 没有把 `src/access.ts` 的权限判断当成安全边界使用
 
 ---
 

@@ -138,6 +138,12 @@
 | 40901 | 文件不存在 |
 | 40902 | 文件大小超限 |
 
+> **`40101` 与 `40104` 是两件事，不要合并。**
+> `40104` 表达「请求没带租户上下文」——**调用姿势**问题（链路漏了租户，或客户端既没带
+> `X-Tenant-Id`、令牌里也没有 `tid`），属服务端缺陷；`40101` 表达「要找的那个租户不存在」
+> ——**请求内容**问题，前端应提示用户。类比 HTTP：前者像 `401`（没带凭证），后者像 `404`
+> （资源不存在）。服务端 `40104` 的唯一出口是 `TenantContext.requireTenantId()`。
+
 ### 1.4 认证机制
 
 **请求头：**
@@ -226,18 +232,21 @@ POST /auth/login
     "accessToken": "eyJhbGciOiJIUzI1NiIs...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
     "expiresIn": 1800,
-    "tokenType": "Bearer",
-    "user": {
-      "id": 42,
-      "username": "admin",
-      "displayName": "系统管理员",
-      "email": "admin@example.com",
-      "roles": ["SUPER_ADMIN"],
-      "mfaEnabled": true
-    }
+    "mfaRequired": false
   }
 }
 ```
+
+> ⚠️ **响应体里没有 `user`，也没有 `tokenType`**（2026-10-14 按代码校正）。
+> 后端 `LoginResponse` 只有上面这四个字段：
+>
+> - 原文档样例中的 `user` 对象不存在 —— **登录后必须再调一次 `GET /system/users/me`**
+>   才能拿到用户信息与角色权限。前端的安全做法是登录成功后立刻拉取，不要依赖登录响应。
+> - `tokenType` 也不存在。令牌类型恒为 `Bearer`，需要时按固定值拼 `Authorization` 头即可。
+> - `mfaRequired` 目前**恒为 `false`**：后端对已启用 MFA 的账号直接返回错误码 `40004`
+>   （TOTP 校验尚未实现），走不到"返回 true 让前端再提交一次验证码"这条路。
+>   保留该字段是为了将来接入 TOTP 时无需改响应结构。
+> - 令牌类型声明是 `Bearer`（见 §1.4 认证机制）。
 
 ### 2.2 刷新Token
 
@@ -253,7 +262,21 @@ POST /auth/refresh
 }
 ```
 
-**响应：** 同登录响应结构。
+**响应：** 同登录响应结构（`accessToken` / `refreshToken` / `expiresIn` / `mfaRequired`）。
+
+> ⚠️ **刷新会签发一对全新令牌**：每次调用都返回**新的** `accessToken` 与 `refreshToken`，
+> 返回的 `refreshToken` 与传入的不是同一个。前端拿到响应后应**整体覆盖**本地保存的两个令牌，
+> 避免本地那份与最近一次签发的不一致。
+>
+> ⚠️ **但传入的 `refreshToken` 并不会因此作废**（2026-10-14 实测确认）。`AuthServiceImpl.refresh()`
+> 只做校验 —— 有效期、令牌类型、用户是否存在、是否已被吊销、账号是否可用 —— 然后签发新的一对，
+> **不吊销传入的那一个**；它在本来的有效期内（7 天）继续可用。实测把同一个 `refreshToken` 连刷两次，
+> 两次都返回 `code=0`。
+>
+> 这条对前端有直接影响：**并发刷新不会因为"令牌已轮换"而失败**，所以不要据此推断
+> "多个请求同时续期会导致用户被踢下线"。客户端把并发刷新收敛成一次的理由是另外两条 ——
+> 避免重复签发 N-1 对令牌、以及避免"本地最终存的是哪一个响应"变得不确定。
+> 真正会刷新失败的情形只有三种：刷新令牌已过期、已被登出吊销、账号被停用或锁定。
 
 ### 2.3 退出登录
 
@@ -367,6 +390,8 @@ GET /system/tenants?page=1&size=20&status=ACTIVE&keyword=科技
 ```
 GET /system/tenants/{id}
 ```
+
+租户不存在（或已软删）时返回 `40101`，**不是** `code:0` + `data:null`。
 
 ### 3.4 更新租户
 
@@ -540,40 +565,49 @@ GET /system/users/me
   "code": 0,
   "data": {
     "id": 42,
-    "username": "admin",
+    "username": "alice",
     "displayName": "系统管理员",
-    "email": "admin@example.com",
+    "email": "alice@sable.dev",
     "phone": "13800138000",
-    "department": "技术部",
-    "roles": [
-      {
-        "id": 1,
-        "name": "SUPER_ADMIN",
-        "displayName": "超级管理员"
-      }
-    ],
-    "permissions": ["*"],
-    "mfaEnabled": true,
-    "lastLoginAt": "2026-09-08T09:00:00+08:00"
+    "status": "ACTIVE",
+    "roles": ["SUPER_ADMIN", "COMPLIANCE_OFFICER"],
+    "permissions": ["system:manage", "audit_log:read"],
+    "mfaEnabled": false,
+    "lastLoginAt": "2026-10-14T09:12:31.482001",
+    "createdAt": "2026-09-08T09:00:00.000000",
+    "updatedAt": "2026-10-14T09:12:31.482001"
   }
 }
 ```
+
+> ⚠️ 2026-10-14 按代码校正的三处（原样例均与实现不符）：
+>
+> - **`roles` 是字符串数组，不是对象数组**。取的是角色 `name`（如 `SUPER_ADMIN`），
+>   不带 `id` / `displayName`。要展示中文名需另外查角色列表。
+> - **`permissions` 是权限标识字符串数组**，且**当前没有权限码字典** —— 值就是角色上
+>   配置的自由字符串（见 `role.permissions`）。上例只是示例取值，不要当作合法枚举。
+> - **`department` 不在此投影里**。它落在 `tenant_user.department`（创建用户时会写入），
+>   但 `UserResponse` 未包含该字段，所以响应里看不到。
+> - 空值字段（如 `avatarUrl`、`lockedUntil`）会**整个从 JSON 里消失**，而不是返回 `null` ——
+>   全局序列化配了 `default-property-inclusion: non_null`。`roles` / `permissions` 因此
+>   刻意用**空数组**而不是 null 作默认值，保证前端可以无脑遍历。
+> - 时间格式是 `yyyy-MM-ddTHH:mm:ss.SSSSSS`（带 `T`、微秒 6 位、**无时区**），
+>   不是原样例的 `+08:00` 形式。`R.timestamp` 则是 epoch 毫秒。
 
 **关于用户相关接口的响应（已实现约定）：**
 
 - 4.1 / 4.2 / 4.9 一律返回**脱敏投影**，字段白名单为：
   `id` / `username` / `displayName` / `email` / `phone` / `avatarUrl` / `status` /
-  `mfaEnabled` / `lastLoginAt` / `lockedUntil` / `createdAt` / `updatedAt`。
+  `mfaEnabled` / `lastLoginAt` / `lockedUntil` / `createdAt` / `updatedAt` / `roles` / `permissions`。
 - `passwordHash`、`mfaSecret` 属凭证，**任何接口都不会返回**。除投影本身外，启动模块还挂了一层
   Jackson 兜底规则：即使有人直接序列化 `sys_user` 实体（或把它嵌进别的响应对象），这两个字段同样不会出网。
 - `lastLoginIp`、`loginFailCount`、`passwordChangedAt`、`deletedAt` 属内部状态，一并不返回。
 
-> **尚未实现（勿按此联调）**：上例中的 `department`、`roles`、`permissions` 三个字段尚未装配，
-> 属设计目标。`department` 的落点已确定 —— `tenant_user.department`（创建用户时会写入），
-> 但 `UserResponse` 投影尚未包含它，因此响应里仍看不到；`roles` / `permissions` 的装配
-> 依赖接口级鉴权落地，届时与令牌声明一并处理。
-> `GET /system/users/me` **已不再是空桩**：它会依据访问令牌中的身份回查并返回脱敏投影
-> （字段见下方白名单），上例里那三个字段暂缺，其余字段均已返回。
+> **`roles` / `permissions` 的装配范围（重要）**：这两个字段**只在 `GET /system/users/me`
+> 上装配** —— 它按当前登录用户的租户查出全部角色并做权限并集去重。4.1（用户列表）与
+> 4.2（用户详情）走的是同一个 `UserResponse`，但**不装配**这两项，因此响应里恒为 `[]`。
+> 管理端的用户列表页若需要展示某人的角色，得单独取角色列表再对照，**不能指望列表接口带出来**。
+
 
 ---
 
