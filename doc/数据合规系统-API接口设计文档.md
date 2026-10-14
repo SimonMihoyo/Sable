@@ -12,6 +12,7 @@
 | 版本 | 日期 | 修订内容 |
 |------|------|---------|
 | v1.0 | 2026-09-08 | 初始版本 |
+| v1.1 | 2026-10-14 | **成功码由本文档误写的 `200` 更正为 `0`**（与 `R.ok()` 实现一致），全文 27 处示例同步；1.2 增加"业务码 vs HTTP 状态码"判读说明；1.3 错误码表按 `sable-common` 的 `ErrorCode` 枚举逐条校准 |
 
 ---
 
@@ -33,11 +34,14 @@
 
 ### 1.2 统一响应结构
 
+> **`code` 是业务码，与 HTTP 状态码是两个维度。成功固定为 `0`，不是 `200`。**
+> 客户端判断成功一律用 `code === 0`；`200` 是传输层的值，不进入本字段。理由见 1.3。
+
 **成功响应：**
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "message": "success",
   "data": { },
   "timestamp": "2026-09-08T10:30:00.123+08:00",
@@ -49,7 +53,7 @@
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "message": "success",
   "data": {
     "records": [ ],
@@ -76,43 +80,63 @@
 
 ### 1.3 错误码规范
 
+**为什么成功码是 `0` 而不是 `200`：** `code` 是**业务码**，与 HTTP 状态码分属两个维度。
+`200` 表达的是传输层"请求已被成功处理"，把它抄进 body 只会让两个维度重叠；而 `0` 表示成功是
+跨领域的通用约定 —— gRPC canonical code 的 `OK = 0`（官方文档同时标注其 HTTP 映射为 `200 OK`，
+正说明二者是两回事）、C 的 `errno`、进程退出码、Windows `ERROR_SUCCESS` 均为 0。
+服务端实现见 `sable-common` 的 `R.ok()` 与 `ErrorCode.SUCCESS`。
+
 | 范围 | 模块 | 说明 |
 |------|------|------|
-| 200 | 全局 | 成功 |
-| 40001-40099 | 认证鉴权 | 登录、Token、权限相关 |
-| 40101-40199 | 租户管理 | 租户相关错误 |
+| 0 | 全局 | **成功** |
+| 1-2 | 全局 | 框架级错误：内部错误、参数校验失败 |
+| 404 / 405 / 415 | 全局 | 与 HTTP 状态码同值：路径不存在 / 方法不支持 / 媒体类型不支持 |
+| 40001-40099 | 认证鉴权 | 登录、Token、MFA、账号锁定 |
+| 40101-40199 | 租户管理 | 租户相关错误、租户上下文缺失 |
 | 40201-40299 | 数据源管理 | 数据源连接、扫描相关 |
 | 40301-40399 | 分类分级 | 规则、分级相关 |
-| 40401-40499 | 审计引擎 | 日志查询、SDK相关 |
+| 40401-40499 | 审计引擎 | 日志查询、SDK 相关 |
 | 40501-40599 | 合规评估 | 评估、检查项相关 |
 | 40601-40699 | 告警引擎 | 规则、事件相关 |
 | 40701-40799 | 报告引擎 | 报告生成相关 |
-| 50001-50099 | 系统内部 | 未预期错误 |
+| 40801-40899 | 权限角色 | 无权限、角色相关 |
+| 40901-40999 | 文件管理 | 文件上传、大小限制相关 |
 
-**常用错误码：**
+> `404` / `405` / `415` 三个值与 HTTP 状态码同值是**冗余**的：这几种情况下 HTTP 状态码本身
+> 就是真实的，客户端看 HTTP 状态即可。保留在 body 里只是为了让"只解析 body"的调用方能统一分支。
+
+**常用错误码**（下表与 `sable-common` 的 `ErrorCode` 枚举逐条对应，改代码须同步改表）：
 
 | 错误码 | 含义 |
 |--------|------|
-| 200 | 成功 |
-| 40001 | 用户名或密码错误 |
-| 40002 | Token已过期 |
-| 40003 | Token无效 |
-| 40004 | 无权限访问 |
-| 40005 | MFA验证失败 |
+| 0 | 成功 |
+| 1 | 系统内部错误 |
+| 2 | 参数校验失败 |
+| 40001 | 认证失败 |
+| 40002 | Token 已过期 |
+| 40003 | Token 无效 |
+| 40004 | 需要 MFA 验证 |
+| 40005 | MFA 验证码错误 |
 | 40006 | 账号已锁定 |
 | 40101 | 租户不存在 |
 | 40102 | 租户已停用 |
-| 40103 | 超出租户配额限制 |
+| 40103 | 租户配额超限 |
+| 40104 | 缺少租户上下文（服务端缺陷，不是用户输入问题） |
 | 40201 | 数据源不存在 |
 | 40202 | 数据源连接失败 |
-| 40203 | 数据源正在扫描中 |
-| 40204 | 扫描任务不存在 |
+| 40203 | 数据源名称重复 |
 | 40301 | 分类规则不存在 |
-| 40302 | 内置规则不可删除 |
-| 40401 | 审计日志查询参数无效 |
+| 40302 | 规则冲突 |
+| 40401 | 审计事件格式错误 |
 | 40501 | 评估任务不存在 |
-| 40502 | 评估任务状态不允许此操作 |
-| 50001 | 系统内部错误 |
+| 40502 | 评估任务正在执行中 |
+| 40601 | 告警规则不存在 |
+| 40701 | 报告不存在 |
+| 40702 | 报告生成失败 |
+| 40801 | 无权限访问 |
+| 40802 | 角色不存在 |
+| 40901 | 文件不存在 |
+| 40902 | 文件大小超限 |
 
 ### 1.4 认证机制
 
@@ -197,14 +221,14 @@ POST /auth/login
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "accessToken": "eyJhbGciOiJIUzI1NiIs...",
     "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
     "expiresIn": 1800,
     "tokenType": "Bearer",
     "user": {
-      "id": "42",
+      "id": 42,
       "username": "admin",
       "displayName": "系统管理员",
       "email": "admin@example.com",
@@ -251,7 +275,7 @@ POST /auth/logout
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "message": "success"
 }
 ```
@@ -318,9 +342,9 @@ POST /system/tenants
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "1001",
+    "id": 1001,
     "name": "示例科技有限公司",
     "code": "example_tech",
     "planType": "PROFESSIONAL",
@@ -376,7 +400,7 @@ GET /system/tenants/{id}/usage
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "dataSourceCount": 8,
     "maxDataSources": 20,
@@ -409,9 +433,15 @@ POST /system/users
   "email": "zhangsan@example.com",
   "phone": "13800138000",
   "displayName": "张三",
-  "department": "技术部"
+  "department": "技术部",
+  "roleIds": [1, 2]
 }
 ```
+
+> **租户来源**：请求体里不传租户，新用户归属到调用方访问令牌中的租户（`tid`）。
+> **`department`** 落 `tenant_user.department`（部门是「用户在某租户下的」属性，不是 `sys_user` 的列）。
+> **`roleIds`** 逐个写入 `tenant_user_role`，一个用户可同时持有多个角色；不传或传空即为无角色。
+> 用户、租户归属、角色授予在同一事务内完成，任一步失败都不会留下「账号建了却进不了租户」的半成品。
 
 ### 4.2 查询用户列表
 
@@ -441,9 +471,12 @@ PUT /system/users/{id}/roles
 
 ```json
 {
-  "roleIds": ["1", "2"]
+  "roleIds": [1, 2]
 }
 ```
+
+**覆盖式语义**：`roleIds` 即该用户在当前租户下的**最终**角色集合 —— 未列入的角色会被收回，
+传空数组等于收回其全部角色。租户取自访问令牌，与创建用户一致。
 
 ### 4.6 重置密码
 
@@ -504,9 +537,9 @@ GET /system/users/me
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "42",
+    "id": 42,
     "username": "admin",
     "displayName": "系统管理员",
     "email": "admin@example.com",
@@ -514,7 +547,7 @@ GET /system/users/me
     "department": "技术部",
     "roles": [
       {
-        "id": "1",
+        "id": 1,
         "name": "SUPER_ADMIN",
         "displayName": "超级管理员"
       }
@@ -535,8 +568,12 @@ GET /system/users/me
   Jackson 兜底规则：即使有人直接序列化 `sys_user` 实体（或把它嵌进别的响应对象），这两个字段同样不会出网。
 - `lastLoginIp`、`loginFailCount`、`passwordChangedAt`、`deletedAt` 属内部状态，一并不返回。
 
-> **尚未实现（勿按此联调）**：上例中的 `department` 在 `sys_user` 表中**没有对应列**，
-> `roles` 与 `permissions` 也尚未装配 —— 它们是设计目标，`GET /system/users/me` 目前返回空数据的桩。
+> **尚未实现（勿按此联调）**：上例中的 `department`、`roles`、`permissions` 三个字段尚未装配，
+> 属设计目标。`department` 的落点已确定 —— `tenant_user.department`（创建用户时会写入），
+> 但 `UserResponse` 投影尚未包含它，因此响应里仍看不到；`roles` / `permissions` 的装配
+> 依赖接口级鉴权落地，届时与令牌声明一并处理。
+> `GET /system/users/me` **已不再是空桩**：它会依据访问令牌中的身份回查并返回脱敏投影
+> （字段见下方白名单），上例里那三个字段暂缺，其余字段均已返回。
 
 ---
 
@@ -569,9 +606,9 @@ POST /discovery/sources
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "101",
+    "id": 101,
     "name": "生产库-用户中心",
     "type": "MYSQL",
     "host": "192.168.1.100",
@@ -621,7 +658,7 @@ POST /discovery/sources/{id}/test
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "success": true,
     "message": "连接成功",
@@ -661,9 +698,9 @@ POST /discovery/sources/{sourceId}/scans
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "taskId": "5001",
+    "taskId": 5001,
     "status": "PENDING",
     "createdAt": "2026-09-08T10:30:00+08:00"
   }
@@ -686,10 +723,10 @@ GET /discovery/scans/{taskId}
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "5001",
-    "sourceId": "101",
+    "id": 5001,
+    "sourceId": 101,
     "sourceName": "生产库-用户中心",
     "scanType": "FULL",
     "triggerType": "MANUAL",
@@ -741,7 +778,7 @@ GET /discovery/sources/{sourceId}/assets/tree
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": [
     {
       "schemaName": "public",
@@ -806,7 +843,7 @@ PUT /discovery/columns/batch-sensitivity
 
 ```json
 {
-  "columnIds": ["201", "202", "203"],
+  "columnIds": [201, 202, 203],
   "sensitivity": "GENERAL",
   "category": "企业信息",
   "reason": "批量修正为非敏感字段"
@@ -898,7 +935,7 @@ POST /classify/rules/test
 
 ```json
 {
-  "ruleId": "1",
+  "ruleId": 1,
   "testValues": ["110101199001011234", "abc123", "13800138000"]
 }
 ```
@@ -907,7 +944,7 @@ POST /classify/rules/test
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": [
     { "value": "110101199001011234", "matched": true },
     { "value": "abc123", "matched": false },
@@ -926,7 +963,7 @@ GET /classify/standards?type=PIPL
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "type": "PIPL",
     "version": "1.0",
@@ -982,12 +1019,12 @@ GET /audit/logs
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "records": [
       {
-        "id": "900001",
-        "userId": "42",
+        "id": 900001,
+        "userId": 42,
         "userName": "张三",
         "operation": "QUERY",
         "targetDesc": "user_center.public.t_user.phone",
@@ -1027,7 +1064,7 @@ GET /audit/statistics
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "total": 125000,
     "byOperation": [
@@ -1046,8 +1083,8 @@ GET /audit/statistics
       { "date": "2026-09-02", "count": 16200 }
     ],
     "topUsers": [
-      { "userId": "42", "userName": "张三", "count": 8500 },
-      { "userId": "43", "userName": "李四", "count": 7200 }
+      { "userId": 42, "userName": "张三", "count": 8500 },
+      { "userId": 43, "userName": "李四", "count": 7200 }
     ],
     "topTargets": [
       { "targetDesc": "user_center.public.t_user.phone", "count": 12000 },
@@ -1087,7 +1124,7 @@ POST /audit/logs/verify
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "totalChecked": 125000,
     "validCount": 125000,
@@ -1112,7 +1149,7 @@ POST /audit/events
 {
   "events": [
     {
-      "userId": "42",
+      "userId": 42,
       "userName": "张三",
       "operation": "QUERY",
       "targetDesc": "user_center.public.t_user.phone",
@@ -1131,7 +1168,7 @@ POST /audit/events
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "accepted": 1,
     "rejected": 0
@@ -1221,7 +1258,7 @@ PUT /alert/events/batch-handle
 
 ```json
 {
-  "eventIds": ["301", "302", "303"],
+  "eventIds": [301, 302, 303],
   "status": "ACKNOWLEDGED",
   "remark": "批量确认"
 }
@@ -1252,9 +1289,9 @@ POST /assessment/tasks
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "6001",
+    "id": 6001,
     "name": "2026年Q3 PIPL合规评估",
     "standardType": "PIPL",
     "status": "DRAFT",
@@ -1280,9 +1317,9 @@ GET /assessment/tasks/{id}
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "id": "6001",
+    "id": 6001,
     "name": "2026年Q3 PIPL合规评估",
     "standardType": "PIPL",
     "standardVersion": "1.0",
@@ -1294,7 +1331,7 @@ GET /assessment/tasks/{id}
     "naItems": 4,
     "score": 78.50,
     "grade": "C",
-    "assessorId": "42",
+    "assessorId": 42,
     "startedAt": "2026-09-08T10:30:00+08:00",
     "completedAt": null
   }
@@ -1340,7 +1377,7 @@ POST /assessment/tasks/{taskId}/auto-evaluate
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "totalAutoItems": 20,
     "evaluated": 20,
@@ -1362,7 +1399,7 @@ PUT /assessment/tasks/{taskId}/items/{itemId}/rectify
 
 ```json
 {
-  "assigneeId": "43",
+  "assigneeId": 43,
   "dueDate": "2026-10-15",
   "gapDescription": "缺少个人信息保护影响评估制度",
   "suggestion": "参照PIPL第55条，建立PIA评估流程，覆盖以下场景：..."
@@ -1399,7 +1436,7 @@ POST /reports/assessment
 
 ```json
 {
-  "assessmentId": "6001",
+  "assessmentId": 6001,
   "templateId": "DEFAULT",
   "includeGapAnalysis": true,
   "includeSuggestion": true
@@ -1410,9 +1447,9 @@ POST /reports/assessment
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
-    "reportId": "7001",
+    "reportId": 7001,
     "status": "GENERATING",
     "estimatedSeconds": 30
   }
@@ -1429,7 +1466,7 @@ POST /reports/asset
 
 ```json
 {
-  "sourceIds": ["101", "102"],
+  "sourceIds": [101, 102],
   "includeSensitivityDistribution": true,
   "includeCategoryDistribution": true
 }
@@ -1501,7 +1538,7 @@ GET /dashboard/overview
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "complianceScore": 78.5,
     "grade": "C",
@@ -1528,7 +1565,7 @@ GET /dashboard/assets
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "totalSources": 8,
     "totalSchemas": 15,
@@ -1561,7 +1598,7 @@ GET /dashboard/audit-trend?days=30
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "dailyTrend": [
       { "date": "2026-08-10", "total": 14500, "anomaly": 2 },
@@ -1624,7 +1661,7 @@ GET /system/health
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "status": "HEALTHY",
     "components": [
@@ -1667,7 +1704,7 @@ Content-Type: multipart/form-data
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "data": {
     "fileId": "file_001",
     "fileName": "合规制度v2.pdf",
