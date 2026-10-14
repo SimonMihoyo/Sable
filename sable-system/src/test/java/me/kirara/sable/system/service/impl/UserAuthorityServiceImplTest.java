@@ -6,8 +6,10 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import me.kirara.sable.system.auth.UserAuthority;
 import me.kirara.sable.system.entity.Role;
 import me.kirara.sable.system.entity.TenantUser;
+import me.kirara.sable.system.entity.TenantUserRole;
 import me.kirara.sable.system.mapper.RoleMapper;
 import me.kirara.sable.system.mapper.TenantUserMapper;
+import me.kirara.sable.system.mapper.TenantUserRoleMapper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,14 +31,17 @@ import static org.mockito.Mockito.when;
 /**
  * {@link UserAuthorityServiceImpl} 单元测试。
  *
- * <p>Mapper 用 Mockito 模拟，被验证的是"归属关系的选取与降级策略"。</p>
+ * <p>Mapper 用 Mockito 模拟，被验证的是"归属关系的选取与降级策略"。
+ * 角色经 {@code tenant_user_role} 关联，因此一个用户可以装配到<b>多个</b>角色名。</p>
  */
 @SuppressWarnings("unchecked")
 class UserAuthorityServiceImplTest {
 
     private static final long USER_ID = 42L;
+    private static final long TENANT_ID = 1001L;
 
     private TenantUserMapper tenantUserMapper;
+    private TenantUserRoleMapper tenantUserRoleMapper;
     private RoleMapper roleMapper;
     private UserAuthorityServiceImpl service;
 
@@ -45,23 +50,40 @@ class UserAuthorityServiceImplTest {
         // lambdaQuery 靠 TableInfo 缓存把方法引用映射成列名，该缓存只在 Spring 启动时建立
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, TenantUser.class);
+        TableInfoHelper.initTableInfo(assistant, TenantUserRole.class);
         TableInfoHelper.initTableInfo(assistant, Role.class);
 
         tenantUserMapper = mock(TenantUserMapper.class);
+        tenantUserRoleMapper = mock(TenantUserRoleMapper.class);
         roleMapper = mock(RoleMapper.class);
-        service = new UserAuthorityServiceImpl(tenantUserMapper, roleMapper);
+        service = new UserAuthorityServiceImpl(tenantUserMapper, tenantUserRoleMapper, roleMapper);
     }
 
     @Test
     @DisplayName("单个租户归属时装配租户与角色名")
     void singleMembership() {
-        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, 1001L, 5L)));
-        when(roleMapper.selectOne(any())).thenReturn(role("COMPLIANCE_OFFICER"));
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(role(5L, "COMPLIANCE_OFFICER")));
 
         UserAuthority authority = service.resolve(USER_ID);
 
-        assertEquals(1001L, authority.getTenantId().longValue());
+        assertEquals(TENANT_ID, authority.getTenantId().longValue());
         assertEquals(List.of("COMPLIANCE_OFFICER"), authority.getRoleNames());
+    }
+
+    @Test
+    @DisplayName("同一租户下授予多个角色时全部装配，不取其一")
+    void multipleRolesInSameTenant() {
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L), grant(6L), grant(7L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(
+                role(5L, "AUDITOR"), role(6L, "VIEWER"), role(7L, "DATA_STEWARD")));
+
+        UserAuthority authority = service.resolve(USER_ID);
+
+        assertEquals(List.of("AUDITOR", "VIEWER", "DATA_STEWARD"), authority.getRoleNames(),
+                "多角色必须全部进令牌，而不是只挑一个");
     }
 
     @Test
@@ -73,19 +95,20 @@ class UserAuthorityServiceImplTest {
 
         assertNull(authority.getTenantId());
         assertTrue(authority.getRoleNames().isEmpty());
-        verify(roleMapper, never()).selectOne(any());
+        verify(tenantUserRoleMapper, never()).selectList(any());
     }
 
     @Test
     @DisplayName("属于多个租户时取最早加入的一个，并把排序下推到 SQL")
     void multipleMemberships() {
         when(tenantUserMapper.selectList(any()))
-                .thenReturn(List.of(membership(7L, 1001L, 5L), membership(8L, 1002L, 6L)));
-        when(roleMapper.selectOne(any())).thenReturn(role("VIEWER"));
+                .thenReturn(List.of(membership(7L, TENANT_ID), membership(8L, 1002L)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(6L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of(role(6L, "VIEWER")));
 
         UserAuthority authority = service.resolve(USER_ID);
 
-        assertEquals(1001L, authority.getTenantId().longValue(),
+        assertEquals(TENANT_ID, authority.getTenantId().longValue(),
                 "应取查询结果第一条（最早加入），而不是最后一条");
         assertEquals(List.of("VIEWER"), authority.getRoleNames());
 
@@ -100,13 +123,27 @@ class UserAuthorityServiceImplTest {
     @Test
     @DisplayName("角色不存在或已软删除时仍保留租户，只是角色为空")
     void roleGone() {
-        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, 1001L, 5L)));
-        when(roleMapper.selectOne(any())).thenReturn(null);
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of(grant(5L)));
+        when(roleMapper.selectList(any())).thenReturn(List.of());
 
         UserAuthority authority = service.resolve(USER_ID);
 
-        assertEquals(1001L, authority.getTenantId().longValue());
+        assertEquals(TENANT_ID, authority.getTenantId().longValue());
         assertTrue(authority.getRoleNames().isEmpty());
+    }
+
+    @Test
+    @DisplayName("没有任何角色授予时角色为空列表，且不去查角色表")
+    void noRoleGrants() {
+        when(tenantUserMapper.selectList(any())).thenReturn(List.of(membership(7L, TENANT_ID)));
+        when(tenantUserRoleMapper.selectList(any())).thenReturn(List.of());
+
+        UserAuthority authority = service.resolve(USER_ID);
+
+        assertEquals(TENANT_ID, authority.getTenantId().longValue());
+        assertTrue(authority.getRoleNames().isEmpty());
+        verify(roleMapper, never()).selectList(any());
     }
 
     @Test
@@ -119,19 +156,26 @@ class UserAuthorityServiceImplTest {
         verify(tenantUserMapper, never()).selectList(any());
     }
 
-    private TenantUser membership(Long id, Long tenantId, Long roleId) {
+    private TenantUser membership(Long id, Long tenantId) {
         TenantUser membership = new TenantUser();
         membership.setId(id);
         membership.setUserId(USER_ID);
         membership.setTenantId(tenantId);
-        membership.setRoleId(roleId);
         membership.setStatus("ACTIVE");
         return membership;
     }
 
-    private Role role(String name) {
+    private TenantUserRole grant(Long roleId) {
+        TenantUserRole grant = new TenantUserRole();
+        grant.setTenantId(TENANT_ID);
+        grant.setUserId(USER_ID);
+        grant.setRoleId(roleId);
+        return grant;
+    }
+
+    private Role role(Long id, String name) {
         Role role = new Role();
-        role.setId(5L);
+        role.setId(id);
         role.setName(name);
         role.setDeletedAt(null);
         return role;

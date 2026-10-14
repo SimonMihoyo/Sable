@@ -6,7 +6,13 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import me.kirara.sable.common.entity.BaseEntity;
 import java.time.LocalDateTime;
 
-/** 租户用户关联表 public.tenant_user */
+/**
+ * 租户用户关联表 public.tenant_user
+ *
+ * <p>只描述「某用户是不是某租户的成员」—— 部门与状态挂在本表。角色**不在这里**：
+ * 同一用户在同一租户下可持有多个角色，故拆到 {@link TenantUserRole}，
+ * 否则部门与状态会随角色数重复存储。</p>
+ */
 @TableName("tenant_user")
 public class TenantUser extends BaseEntity {
 
@@ -14,7 +20,6 @@ public class TenantUser extends BaseEntity {
     private Long id;
     private Long tenantId;
     private Long userId;
-    private Long roleId;
     /** 数据范围权限维度 */
     private String department;
     /** ACTIVE / DISABLED */
@@ -27,8 +32,6 @@ public class TenantUser extends BaseEntity {
     public void setTenantId(Long tenantId) { this.tenantId = tenantId; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
-    public Long getRoleId() { return roleId; }
-    public void setRoleId(Long roleId) { this.roleId = roleId; }
     public String getDepartment() { return department; }
     public void setDepartment(String department) { this.department = department; }
     public String getStatus() { return status; }

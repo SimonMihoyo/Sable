@@ -3,7 +3,11 @@ package me.kirara.sable.system.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import jakarta.validation.Valid;
+import me.kirara.sable.common.BusinessException;
+import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.R;
+import me.kirara.sable.common.TenantContext;
+import me.kirara.sable.common.UserContext;
 import me.kirara.sable.common.page.PageQuery;
 import me.kirara.sable.common.page.PageResult;
 import me.kirara.sable.system.dto.StatusRequest;
@@ -39,11 +43,12 @@ public class UserController {
      * 创建用户。
      *
      * <p>密码的哈希在 {@link SysUserService#createUser} 内完成；响应经 {@link UserResponse}
-     * 脱敏，不会回吐 {@code passwordHash}。</p>
+     * 脱敏，不会回吐 {@code passwordHash}。租户取自访问令牌，新用户会连同
+     * {@code department} 与 {@code roleIds} 一并落到该租户下。</p>
      */
     @PostMapping
     public R<UserResponse> create(@Valid @RequestBody UserCreateRequest request) {
-        return R.ok(UserResponse.from(sysUserService.createUser(request)));
+        return R.ok(UserResponse.from(sysUserService.createUser(requireTenantId(), request)));
     }
 
     @GetMapping
@@ -60,10 +65,28 @@ public class UserController {
                 UserResponse.fromAll(page.getRecords())));
     }
 
+    /**
+     * 获取当前登录用户信息。
+     *
+     * <p>用户身份由 {@code JwtAuthenticationFilter} 从 {@code Authorization} 头解析后写入
+     * {@link UserContext}，本接口据此回查并走 {@link UserResponse} 脱敏投影返回。</p>
+     *
+     * <p>注意：响应中的 {@code department} / {@code roles} / {@code permissions} 尚未装配，
+     * 与 API 设计文档 4.9 节的「尚未实现」说明一致。</p>
+     */
     @GetMapping("/me")
     public R<UserResponse> me() {
-        // TODO 从安全上下文中获取当前用户
-        return R.ok();
+        Long userId = UserContext.getUserId();
+        if (userId == null) {
+            // 本接口不在白名单内，正常应由认证过滤器拦下；此处兜底，避免拿 null 去查库
+            throw new BusinessException(ErrorCode.AUTH_FAILED);
+        }
+        SysUser user = sysUserService.getById(userId);
+        if (user == null || user.getDeletedAt() != null) {
+            // 令牌本身有效，但它指向的用户已不存在（例如账号已被删除）——按认证失效处理
+            throw new BusinessException(ErrorCode.AUTH_FAILED);
+        }
+        return R.ok(UserResponse.from(user));
     }
 
     @PutMapping("/{id}")
@@ -84,9 +107,14 @@ public class UserController {
         return R.ok();
     }
 
+    /**
+     * 设置用户在当前租户下的角色集合。
+     *
+     * <p>覆盖式语义：入参即该用户的最终角色集合，未列入的角色会被收回。</p>
+     */
     @PutMapping("/{id}/roles")
     public R<Void> assignRoles(@PathVariable Long id, @RequestBody List<Long> roleIds) {
-        // TODO 维护 tenant_user.role_id
+        sysUserService.assignRoles(requireTenantId(), id, roleIds);
         return R.ok();
     }
 
@@ -103,5 +131,21 @@ public class UserController {
         user.setStatus(request.getStatus());
         sysUserService.updateById(user);
         return R.ok();
+    }
+
+    /**
+     * 取当前请求的租户 ID。
+     *
+     * <p>创建用户与分配角色都必须在具体租户下进行 —— 没有租户归属的用户登录后
+     * 装配不到任何租户与角色。租户来自访问令牌里的 {@code tid}
+     * （见 {@code JwtAuthenticationFilter}），这里只做兜底判断。</p>
+     */
+    private Long requireTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new BusinessException(ErrorCode.TENANT_NOT_FOUND.getCode(),
+                    "该操作需要租户上下文，当前请求未携带租户");
+        }
+        return tenantId;
     }
 }
