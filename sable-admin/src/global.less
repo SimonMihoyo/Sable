@@ -1,0 +1,61 @@
+/**
+ * 全局样式。
+ *
+ * 模板原本在这里用 5 段 @font-face 引了 AlibabaSans 的各字重，字体文件全部来自
+ * mdn.alipayobjects.com。对一个合规产品来说这不合适：每次打开登录页/主界面都会
+ * 向第三方域名发起请求（暴露访问者 IP 与来源），也给"系统可用性"平添一个不受
+ * 自己控制的外部依赖。已改为系统字体栈。
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+}
+
+.colorWeak {
+  filter: invert(80%);
+}
+
+.ant-layout {
+  min-height: 100vh;
+}
+.ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed {
+  left: unset;
+}
+
+.ant-pro-sider-collapsed .ant-pro-sider-link span:not([role='img']) {
+  display: none;
+}
+
+canvas {
+  display: block;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+@media (max-width: 768px) {
+  .ant-table {
+    width: 100%;
+    overflow-x: auto;
+    &-thead > tr,
+    &-tbody > tr {
+      > th,
+      > td {
+        white-space: pre;
+        > span {
+          display: block;
+        }
+      }
+    }
+  }
+}

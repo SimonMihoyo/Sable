@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+
+# umi 生成的临时文件（由 `max setup` / `max dev` 生成，含类型声明与路由清单）
+.umi/
+.umi-production/
+.umi-test/
+.umi-undefined/
+.turbopack/
+
+# 测试覆盖率
+coverage/
+
+# 本地环境
+.DS_Store
+*.log
+npm-debug.log*
+yarn-error.log*
+.idea/
+.vscode/
+.history
