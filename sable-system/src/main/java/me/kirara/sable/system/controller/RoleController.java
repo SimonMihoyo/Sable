@@ -47,13 +47,13 @@ public class RoleController {
      * 而是直接撞 not-null 约束。</p>
      *
      * <p>租户取自访问令牌的 {@code tid}（见 {@code JwtAuthenticationFilter} 写入的
-     * {@link TenantContext}），缺失时报 {@code 40104}，与
-     * {@code TenantRequiredInterceptor} 对租户范围查询的兜底保持同一错误码。</p>
+     * {@link TenantContext}），缺失时由 {@link TenantContext#requireTenantId()} 报
+     * {@code 40104}，与 {@code TenantRequiredInterceptor} 对租户范围查询的兜底同一错误码。</p>
      */
     @PostMapping
     public R<Role> create(@Valid @RequestBody RoleSaveRequest request) {
         Role role = new Role();
-        role.setTenantId(requireTenantId());
+        role.setTenantId(TenantContext.requireTenantId());
         role.setName(request.getName());
         role.setDisplayName(request.getDisplayName());
         role.setDescription(request.getDescription());
@@ -110,20 +110,5 @@ public class RoleController {
         role.setPermissions(JsonArrays.toJsonArray(request.getPermissions()));
         roleService.updateById(role);
         return R.ok();
-    }
-
-    /**
-     * 取当前请求的租户 ID。
-     *
-     * <p>与 {@code UserController#requireTenantId()} 同源：角色的归属必须在具体租户下确定。
-     * 这里只做兜底 —— 正常路径上租户已由 {@code JwtAuthenticationFilter} 从令牌写入
-     * {@link TenantContext}。</p>
-     */
-    private Long requireTenantId() {
-        Long tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
-            throw new BusinessException(ErrorCode.TENANT_CONTEXT_MISSING);
-        }
-        return tenantId;
     }
 }

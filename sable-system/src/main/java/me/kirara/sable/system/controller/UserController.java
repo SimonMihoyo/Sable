@@ -48,7 +48,7 @@ public class UserController {
      */
     @PostMapping
     public R<UserResponse> create(@Valid @RequestBody UserCreateRequest request) {
-        return R.ok(UserResponse.from(sysUserService.createUser(requireTenantId(), request)));
+        return R.ok(UserResponse.from(sysUserService.createUser(TenantContext.requireTenantId(), request)));
     }
 
     @GetMapping
@@ -114,7 +114,7 @@ public class UserController {
      */
     @PutMapping("/{id}/roles")
     public R<Void> assignRoles(@PathVariable Long id, @RequestBody List<Long> roleIds) {
-        sysUserService.assignRoles(requireTenantId(), id, roleIds);
+        sysUserService.assignRoles(TenantContext.requireTenantId(), id, roleIds);
         return R.ok();
     }
 
@@ -131,21 +131,5 @@ public class UserController {
         user.setStatus(request.getStatus());
         sysUserService.updateById(user);
         return R.ok();
-    }
-
-    /**
-     * 取当前请求的租户 ID。
-     *
-     * <p>创建用户与分配角色都必须在具体租户下进行 —— 没有租户归属的用户登录后
-     * 装配不到任何租户与角色。租户来自访问令牌里的 {@code tid}
-     * （见 {@code JwtAuthenticationFilter}），这里只做兜底判断。</p>
-     */
-    private Long requireTenantId() {
-        Long tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
-            throw new BusinessException(ErrorCode.TENANT_NOT_FOUND.getCode(),
-                    "该操作需要租户上下文，当前请求未携带租户");
-        }
-        return tenantId;
     }
 }

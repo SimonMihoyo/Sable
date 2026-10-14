@@ -3,6 +3,8 @@ package me.kirara.sable.system.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import jakarta.validation.Valid;
+import me.kirara.sable.common.BusinessException;
+import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.R;
 import me.kirara.sable.common.page.PageQuery;
 import me.kirara.sable.common.page.PageResult;
@@ -58,9 +60,21 @@ public class TenantController {
         return R.ok(PageResult.of(page.getCurrent(), page.getSize(), page.getTotal(), page.getRecords()));
     }
 
+    /**
+     * 查询租户详情。
+     *
+     * <p>租户不存在（或已软删）时报 {@link ErrorCode#TENANT_NOT_FOUND}（40101）。
+     * 这与"请求没带租户上下文"的 {@link ErrorCode#TENANT_CONTEXT_MISSING}（40104）
+     * 是两件事：那个是<b>调用姿势</b>问题（链路漏了租户，属服务端缺陷），这个是
+     * <b>请求内容</b>问题（客户端该提示"租户不存在"）。不要因二者同属租户域就合并成一个码。</p>
+     */
     @GetMapping("/{id}")
     public R<Tenant> detail(@PathVariable Long id) {
-        return R.ok(tenantService.getById(id));
+        Tenant tenant = tenantService.getById(id);
+        if (tenant == null || tenant.getDeletedAt() != null) {
+            throw new BusinessException(ErrorCode.TENANT_NOT_FOUND);
+        }
+        return R.ok(tenant);
     }
 
     @PutMapping("/{id}")
