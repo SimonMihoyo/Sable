@@ -1,2 +1,6 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+# PowerShell 脚本同样按 CRLF 检出（与 .cmd 同理）。
+# ⚠️ 另需保证文件本身是 **UTF-8 with BOM** —— 那是文件内容、不是换行约定，
+#    .gitattributes 管不了；PowerShell 5.1 读无 BOM 的 .ps1 会按 GBK 解析而乱码。
+*.ps1 text eol=crlf
