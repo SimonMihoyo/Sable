@@ -172,6 +172,30 @@
 | 40002 | 令牌已过期 |
 | 40003 | 缺少令牌 / 令牌非法 / 令牌类型不对（例如拿刷新令牌访问业务接口）/ 令牌已被吊销 |
 
+**鉴权失败响应：** HTTP `403` + 统一响应体，`code` 固定 `40801`。
+
+通过认证只说明"你是谁"，能否调某个接口还要看令牌里的 `perm` 是否包含该接口要求的权限码。
+校验由 `@PreAuthorize` 在 Controller 方法上完成，权限码字典是
+`me.kirara.sable.common.Permission`。这里按 `403` 返回而不是"200 + 非 0 code"：
+调用方用错了入口，不是"服务端受理了但业务上不成功"。
+
+**各接口需要的权限（当前已绑定的范围）：**
+
+| 接口 | 要求 |
+|------|------|
+| `/auth/login`、`/auth/refresh`、`/auth/logout` | 白名单，无需令牌 |
+| `PUT /auth/password` | 仅需已认证（改自己的密码不该要管理员权限） |
+| `GET /system/users/me` | 仅需已认证 |
+| `/system/users/**`（除 me）、`/system/roles/**`、`/system/tenants/**`、`/system/configs`、`/system/health` | `system:manage` |
+| 其余业务模块（discovery / audit / assessment / alert / report） | **尚未绑定**，见 §6 的已知缺口 |
+
+> ⚠️ **权限的生效时机**：权限放在令牌里，所以改角色或改权限后，最长要等访问令牌过期
+> （`sable.auth.access-token-ttl`，默认 30 分钟）才在接口校验上生效。需要立即生效时，
+> 吊销该用户的令牌（登出走的正是这条路）。
+> 另外注意 `GET /system/users/me` 是按**数据库当前状态**装配的 —— 因此"菜单立刻出现、
+> 点进去仍 403"会在刚授权后的一小段时间内出现。这是刻意的取舍（见
+> `AuthServiceImpl#issueTokens` 的说明），不是缺陷。
+
 **Token 结构 (JWT Payload)：**
 
 ```json
@@ -196,7 +220,7 @@
 | `tid` | 租户 ID；系统级用户为空 |
 | `usr` | 用户名 |
 | `roles` | 角色标识列表（取角色的 `name`） |
-| `perm` | 权限标识列表。**当前恒为空数组** —— 接口级鉴权尚未实现，权限装配待其落地时补齐 |
+| `perm` | 权限标识列表 —— 该用户全部角色的 `permissions` 并集去重。**接口级鉴权的判据**，由 `@PreAuthorize` 读取；权限码字典见 `me.kirara.sable.common.Permission` |
 | `typ` | 令牌类型：`access` / `refresh`。刷新令牌只带 `sub`、`jti`、`typ`，不含业务声明 |
 
 **租户如何确定：** 以令牌中的 `tid` 为准。`tenant_user` 允许一个用户同时属于多个租户，

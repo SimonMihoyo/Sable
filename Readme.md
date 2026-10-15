@@ -28,7 +28,7 @@
 | 持久层 | MyBatis-Plus | 3.5.7 |
 | 数据库 | PostgreSQL | 14+ |
 | 构建 | Maven（Wrapper 3.9.16） | — |
-| 前端 | React SPA（独立工程，规划中） | — |
+| 前端 | React 19 + Ant Design Pro v6 + Umi Max 4（`sable-admin/` 独立工程） | — |
 
 ---
 
@@ -213,19 +213,23 @@ createdb -U postgres sable
 - 统一响应 `R`、全局异常处理、错误码、分页、租户上下文过滤器、MyBatis-Plus 自动填充
 - 审计日志哈希链写入（`AuditLogServiceImpl.append`）
 - 完整数据库 Schema（分区表、约束、索引、加密与哈希链函数）
+- 认证与鉴权：JWT 登录 / 刷新 / 登出 / 改密，以及基于权限码的接口级鉴权（Spring Security `@PreAuthorize`）
+- 前端工程 `sable-admin/`：登录、路由守卫、按权限控制菜单（安全边界在服务端，见 `AGENTS.md` §3.10）
 - 全套设计文档
 
 **待实现（主要 TODO）**
 
-- 认证与鉴权：`AuthServiceImpl` 待接入 Spring Security / JWT
+- 鉴权覆盖面：目前只有 `sable-system` 的接口挂了 `@PreAuthorize`，其余业务模块的接口仍是"登录即可访问"；
+  且角色是租户内资产，而 `/system/tenants` 属全局接口 —— 需要"平台级管理员"身份概念（见 `AGENTS.md` §6）
+- 数据权限与租户配额：架构文档 §4.3 的三支校验里只落了功能权限，另外两支未实现
 - 分类分级引擎：`ClassifyEngineImpl.match()` 四类规则匹配逻辑
 - 审计能力：哈希链校验（`verifyChain`）、按维度统计、异步导出
 - 数据资产发现：数据源连接测试与真实扫描
 - 告警引擎：规则执行与通知分发
 - 报告引擎：模板渲染与 PDF 生成
 - 合规评估：自动检查项执行
-- 自动化测试：目前仅 `sable-app` 引入 `spring-boot-starter-test`，尚无测试用例
-- 前端工程：React SPA 尚未建立
+- 自动化测试：已有后端 136 例 + 前端 39 例，但集中在 `sable-common` / `sable-system`
+  / `sable-app` 与前端基础设施；6 个业务模块尚无测试
 
 ---
 

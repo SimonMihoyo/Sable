@@ -9,7 +9,10 @@
 
 ## 0. 铁律速览（TL;DR）
 
-1. **不引入新依赖**。尤其禁止擅自加入 Lombok、MapStruct、Spring Security、JWT 库、规则引擎（Drools 等）、前端框架。确需新增，先提出来，等确认。
+1. **不引入新依赖**。尤其禁止擅自加入 Lombok、MapStruct、规则引擎（Drools 等）。确需新增，先提出来，等确认。
+   > 例外：**Spring Security 与 JJWT 已在团队决策后引入**（用途与装配禁区见 §3.10）。
+   > 它们已经在了，所以"引入"这件事不必再问；但**怎么装配**有硬性约束，
+   > 不要照着网上的默认配置改。其余依赖仍一律先问。
 2. **不引入新技术栈**。语言、框架、数据库以第 1 节表格为准，不得替换或"升级"。
 3. **不臆造**。不得编造不存在的表、字段、接口、错误码。一切以 `doc/`、`sable-app/src/main/resources/db/migration/` 下的迁移脚本和现有代码为准。`db/dev/` 下的种子数据是**本地假数据**，只描述"开发库长什么样"，不作为结构或字段的依据。
 4. **不重写风格**。沿用现有分层、命名、注释习惯（详见第 3 节）。不要"顺手美化"未提及的文件。
@@ -243,12 +246,68 @@ me.kirara.sable.<module>
 6. **接口类型定义以 `src/services/sable/typings.d.ts` 为准，不以 API 文档为准** ——
    该文档此前多处是"想当然"（登录响应多写了 `tokenType` 与 `user`，`/me` 的 `roles` 写成对象数组）。
    发现不一致时改文档，别改类型去迁就文档。
-7. **`src/access.ts` 是显示控制，不是安全边界**。后端接口级鉴权尚未落地
-   （见 §6），藏菜单挡不住直接调接口。**不要**因为界面藏起来了就把某功能当成"已受保护"。
+7. **`src/access.ts` 是显示控制，安全边界在服务端的 `@PreAuthorize`**（见 §3.10）。
+   两个方向的误判都要避免：**界面藏起来 ≠ 已受保护**；**界面显示出来 ≠ 一定调得通**
+   （令牌里的权限最长 30 分钟才更新，而 `/me` 是按数据库当前状态装配的）。
 8. 菜单名、页面文案**直接写中文**，不再走 `menu.xxx` 的 i18n 间接层 —— 只有 zh-CN 一份语言包，
    多一层 key 只会让"页面上显示什么"多绕一道。
 9. 模板自带的**外链与埋点一律去掉**（日志中已清）：Google Analytics、阿里云 CDN 的 logo /
    背景图 / 字体。合规产品不该在页面里向第三方域名发起请求。新增视觉资源前先确认这一点。
+
+---
+
+## 3.10 鉴权（Spring Security）
+
+> 认证（你是谁）与鉴权（你能做什么）在本项目是**两套机制**，分工不要混：
+> **认证**由 `web/JwtAuthenticationFilter` 自己完成 —— 它要给出 40001/40002/40003
+> 这些细分错误码，Security 的内置入口表达不了；**鉴权**由 `@PreAuthorize` 完成。
+> 装配在 `config/SecurityConfig`。
+
+### 权限码
+
+- **字典是 `me.kirara.sable.common.Permission`** —— 权限码字符串的唯一定义处。
+  另外两份副本：库里 `role.permissions` 的数据、前端 `sable-admin/src/access.ts` 的镜像。
+  前两份之间有测试守着（`PermissionDictionaryTest`），前端那份靠人手工同步。
+- 接口上一律写 `@PreAuthorize("hasAuthority(T(me.kirara.sable.common.Permission).XXX)")`，
+  **不写裸字符串**。拼错权限码不会编译失败，只会让那个接口对**所有人** 403 ——
+  而日志里只有一句"无权限"，看不出是配错了。
+- **一律按权限码判，不按角色名判。** authorities 里只装权限码，所以 `hasRole(...)`
+  在本项目恒为假。角色只是权限的容器，`FR-6.2.2` 允许租户自建角色 ——
+  写死角色名会让自建角色天然失效。
+- **没有通配符**（没有 `*`）。新增权限码后必须有角色被显式授予，否则没人能用。
+  这是刻意选的方向：漏配表现为 403（可发现、可修），而不是"所有人凭空多了权限"（不可发现）。
+- `ControllerAuthorizationTest` 会扫 `me.kirara.sable.system.controller` 下的每个
+  `@RestController`，**新控制器忘了挂 `@PreAuthorize` 会让它变红**。
+  确实要公开的控制器，加进它的例外清单并写明理由 —— 那个"红"是设计意图，不是障碍。
+
+### 装配禁区（改 `SecurityConfig` 前逐条确认）
+
+1. **认证过滤器必须挂在安全链内部**（`addFilterBefore(..., AnonymousAuthenticationFilter.class)`），
+   并且**不能**标 `@Component`。标了会被 Spring Boot 顺带注册成 Servlet 过滤器：
+   每个请求跑两遍，且在链外那一次写进安全上下文的东西会被 `SecurityContextHolderFilter`
+   清掉 —— 现象是"过滤器明明放行了，接口仍然是 401"。
+2. **不要启用 `.cors()`**。跨域由 `WebConfig` 双注册负责（MVC 层 + 压到
+   `HIGHEST_PRECEDENCE` 的 `CorsFilter`）。再让 Security 处理一遍会出现第二个 `CorsFilter`
+   → 响应里出现重复的 `Access-Control-Allow-Origin` → 浏览器按多值拒收。
+   它只在真实跨源请求上出现，是最难查的一类故障。
+3. **`spring.security.filter.order=1` 不要改回默认的 `-100`**。它必须夹在
+   `TraceIdFilter(0)` 与 `TenantContextFilter(2)` 之间：晚了，认证失败的 401 不带 traceId；
+   早了，租户还没写进上下文。
+4. **`csrf` 必须关**（无 Cookie、无会话，且不关会让所有写操作变成 403），
+   **`sessionManagement` 必须 `STATELESS`**。
+5. **响应契约不能退化**：任何拒绝都是"真实 HTTP 状态码 + `R` 体"。三处实现 ——
+   `JwtAuthenticationFilter`（401，主路径）、`SecurityExceptionHandler`（403，实际触发点）、
+   `RestAuthenticationEntryPoint` / `RestAccessDeniedHandler`（兜底，正常情况下不执行）。
+   少一处就会有段路径回空体，而前端读不到 `code` 就分不清"令牌过期可以刷新"与"服务挂了"。
+   `SecurityErrorResponseTest` 钉着这一条。
+
+### 权限的生效时机
+
+权限装在令牌的 `perm` 声明里，因此改角色或改权限后，最长要等访问令牌过期
+（默认 30 分钟）才在接口校验上生效。需要立即生效 → 吊销该用户的令牌（登出走的就是这条路）。
+另注意 `GET /system/users/me` 是按**数据库当前状态**装配的，所以"菜单立刻出现、
+点进去仍 403"会在刚授权后的一小段时间内出现 —— 这是取舍（见
+`AuthServiceImpl#issueTokens`），不是缺陷。
 
 ---
 
@@ -491,10 +550,19 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
 
 > 这几条都不影响编译、也不会让测试变红，只会在真实使用中暴露 —— 排查时优先怀疑这里。
 
-- **接口级鉴权尚未落地**：全项目零 `@PreAuthorize` / `@Secured` / `GrantedAuthority`，
-  也没有权限码字典（`role.permissions` 是自由字符串）。实测用 AUDITOR（`bob`）的令牌
-  调用权限矩阵标 ❌ 的 `/system/tenants`、`/system/users`、`/system/roles`，**全部 200 + code 0 返回数据**。
-  也就是说：**当前任何已登录用户都是超级管理员**。前端按 `roles` 藏菜单只是"看不见"而非"进不去"。
+- **鉴权目前只覆盖 `sable-system`，另外五个业务模块是空白**：`@PreAuthorize` 只挂在
+  `me.kirara.sable.system.controller` 下的控制器（`users` / `roles` / `tenants` / `configs`）。
+  `discovery` / `classify` / `audit` / `assessment` / `alert` / `report` 下的接口
+  **对任何已登录用户开放** —— 它们大多是骨架，但接口确实已经存在。
+  `ControllerAuthorizationTest` 现在只扫 `sable-system` 的控制器包，扩模块时把对应包加进去。
+- **租户管理是全局能力，而角色是租户内的资产**：`/system/tenants` 的语义属平台级
+  （`FR-6.1.4`），但持有 `system:manage` 的任何租户管理员都能创建、停用、删除别的租户。
+  同理 `GET /system/roles` 没有按租户过滤，`RoleController.update/delete/setPermissions`
+  也不校验角色归属。**这个洞用权限码补不上** —— 需要一个"平台级管理员"的身份概念
+  （不属于任何租户，或带一个租户之外的标记），是一次独立的设计决策。
+  当前状态仍严格于改造前（以前是**任何登录用户**都能做这些事）。
+- **数据范围权限（`FR-6.2.3`）零实现**：`tenant_user.department` 只存不读，
+  用户能看到本租户的**全部**数据，而需求要求"只能看到本部门/本业务线的数据"。
 - **RLS 是空转**：`tenant_{id}` 下的表虽然 `ENABLE ROW LEVEL SECURITY`，但没有 POLICY、
   对表属主也不生效。**它不是隔离手段**，真正的隔离靠 schema 路由（§3.8）。
 - **结构化 JSON 日志未做**；集中日志平台与访问日志也未做。
@@ -517,6 +585,8 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
       且租户脚本里没有 schema 前缀
 - [ ] 没有把演示账号一类的假数据写进 `db/migration/` 与 `db/tenant/`（假数据只允许出现在 `db/dev/`）
 - [ ] 业务模块的查询都带得上租户上下文；没关掉 `sable.tenant.fail-fast-without-tenant`
+- [ ] 新增的接口挂了 `@PreAuthorize`，且权限码经 `T(...Permission).XXX` 引用字典（见 §3.10）
+- [ ] 没有顺手启用 `.cors()`、没有改 `spring.security.filter.order`（见 §3.10 装配禁区）
 - [ ] 改了 JSONB 相关代码时，已按 §5.4 打**真实接口**验证（只跑单测不算 —— 那个坑踩过）
 - [ ] 日志走 SLF4J，没有 `System.out`，没有给 mybatis-plus 配 `log-impl`
 - [ ] `./mvnw -q -DskipTests compile` 通过
