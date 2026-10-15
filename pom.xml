@@ -103,7 +103,10 @@
 				<version>${mybatis-plus.version}</version>
 			</dependency>
 
-			<!-- JWT（轻量认证方案：仅用其签发 / 校验，不引入 Spring Security 框架） -->
+			<!-- JWT —— 只用它签发 / 校验令牌。
+			     认证（"你是谁"）由本项目的 JwtAuthenticationFilter 承担，
+			     鉴权（"你能做什么"）由 Spring Security 的 @PreAuthorize 承担（见 AGENTS.md §3.10）。
+			     两者分工明确：Security 不做认证，因此它不会顶掉认证失败时的细分错误码。 -->
 			<dependency>
 				<groupId>io.jsonwebtoken</groupId>
 				<artifactId>jjwt-api</artifactId>

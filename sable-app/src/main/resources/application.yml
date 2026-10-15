@@ -11,6 +11,24 @@ server:
 spring:
   application:
     name: Sable
+  # ── Spring Security ─────────────────────────────────────────────────────
+  autoconfigure:
+    # 关掉"生成默认用户"的自动配置。
+    #
+    # 默认行为是创建一个内存用户（用户名 user、密码随机生成并打印在启动日志里）。
+    # 本项目的认证完全由 JwtAuthenticationFilter 承担，那个账号既用不到，
+    # 又确实是一个**能通过认证的凭证** —— 合规产品不该留这种东西，
+    # 而且它会让启动日志里出现一行"Using generated security password"，看起来像配置漏了。
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  security:
+    filter:
+      # ⚠️ 这个值必须落在 TraceIdFilter(@Order 0) 与 TenantContextFilter(@Order 2) 之间：
+      #   · 晚于 TraceIdFilter —— 认证失败的 401 也要带 traceId、也要回写 X-Request-Id；
+      #   · 早于 TenantContextFilter —— 认证过滤器挂在安全链内部，租户是它写进上下文的，
+      #     排在后面的兜底过滤器要能读到已填好的租户。
+      # Security 的默认顺序是 -100（最靠前），那样认证失败的日志会没有 traceId。
+      order: 1
   datasource:
     driver-class-name: org.postgresql.Driver
     # ⚠️ 结尾的 stringtype=unspecified 不能删 —— 它决定 Java 的 String 以什么类型发给 PostgreSQL。

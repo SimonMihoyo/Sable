@@ -69,6 +69,21 @@
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 		</dependency>
+		<!--
+			接口级鉴权（Spring Security）。
+
+			引入它只为"鉴权"这一半：认证仍由本项目的 JwtAuthenticationFilter 自己做
+			（它要给出 40001/40002/40003 这些细分错误码，Security 的内置入口表达不了），
+			"某个接口需要哪个权限码"则交给 @PreAuthorize。
+
+			⚠️ 装配处有四件必须小心的事（过滤器挂载点、CORS 不能重复、过滤器顺序、
+			响应契约必须保住），全部写在 me.kirara.sable.config.SecurityConfig 的类注释里 ——
+			改鉴权前先读那一段，不要照着网上的默认配置改。
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>

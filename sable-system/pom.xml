@@ -32,7 +32,20 @@
 			<artifactId>mybatis-plus-spring-boot3-starter</artifactId>
 		</dependency>
 
-		<!-- JWT 签发 / 校验（轻量认证方案，不引入 Spring Security 框架） -->
+		<!--
+			接口级鉴权的注解来源（@PreAuthorize / @PostAuthorize）。
+
+			scope 取 provided，与上面的 starter-web 同理：库模块只需要"编译期看得见"这个注解，
+			真正的实现（SecurityFilterChain、过滤器、鉴权管理器）由启动模块引入。
+			provided **不传递依赖**，所以不会把 Spring Security 泄漏给下游模块的运行时。
+		-->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-core</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- JWT 签发 / 校验 —— 认证由本模块的 AuthService 与启动模块的过滤器完成 -->
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
@@ -47,7 +60,12 @@
 			<artifactId>jjwt-jackson</artifactId>
 			<scope>runtime</scope>
 		</dependency>
-		<!-- 密码哈希（BCrypt）——仅取 Spring Security 的 crypto 组件 -->
+		<!--
+			密码哈希（BCrypt）—— 只用 crypto 组件，不引入完整的 Spring Security 运行时。
+
+			它早已在依赖树上，因此后来为鉴权引入 spring-boot-starter-security 时，
+			core / crypto / web 落在同一条版本线上（由 boot 父 pom 统一管理），不存在冲突。
+		-->
 		<dependency>
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-crypto</artifactId>
