@@ -517,8 +517,19 @@ npx max build
 
 **联调起法**（两个都要起）：
 
+一键脚本，推荐日常用这个（后端增量构建后后台跑、前端前台跑，Ctrl+C 一起停）：
+`./scripts/dev-start.sh`（Windows：`.\scripts\dev-start.ps1`），详见脚本头部注释。
+
+手工起法如下 —— 后端端口要和 `config/proxy.ts` 的 target 对上（现为 8080）：
+
 ```bash
-# 后端：默认端口要和 config/proxy.ts 的 target 对上（现为 8080）
+# 后端：注意**不要**用 `mvnw -pl sable-app -am spring-boot:run`
+# ⚠️ 这种「直接目标调用」会在 reactor 里的**每个**模块上都执行一遍，而 -pl ... -am
+# 必然把根聚合模块与 9 个兄弟模块一起拉进 reactor —— 它们都没有主类，于是在第一个
+# 模块就报 "Unable to find a suitable main class"。实测把根模块排除掉也不行
+# （reactor 里还有 sable-common 等）。要真用 spring-boot:run，得先把兄弟模块
+# `install` 进本地仓库、再单独对 sable-app 执行；日常不值得，直接用下面这条：
+./mvnw -pl sable-app -am -Dmaven.test.skip=true package
 SPRING_PROFILES_ACTIVE=dev java -jar sable-app/target/sable-app-0.0.1-SNAPSHOT.jar --server.port=8080
 
 # 前端：Umi 4 默认 8000
@@ -590,6 +601,8 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
 - [ ] 改了 JSONB 相关代码时，已按 §5.4 打**真实接口**验证（只跑单测不算 —— 那个坑踩过）
 - [ ] 日志走 SLF4J，没有 `System.out`，没有给 mybatis-plus 配 `log-impl`
 - [ ] `./mvnw -q -DskipTests compile` 通过
+- [ ] 改了 `scripts/dev-start.sh` 时，`scripts/dev-start.ps1` 已同步改（两版功能对等；
+      ps1 必须存成 **UTF-8 with BOM**，否则 PowerShell 5.1 按 GBK 读会乱码）
 - [ ] 没有改动与本任务无关的文件
 
 **动了 `sable-admin/` 时额外确认：**

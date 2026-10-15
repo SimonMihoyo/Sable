@@ -111,16 +111,32 @@ createdb -U postgres sable
 
 ### 3. 构建并运行
 
+**一键启动（推荐日常使用）** —— 后端增量构建后转到后台、前端在前台跑以便看热更新，
+Ctrl+C 一次把两者都停掉：
+
 ```bash
-# 全量构建（跳过测试）
-./mvnw clean package -DskipTests
-
-# 运行启动模块
-./mvnw -pl sable-app -am spring-boot:run
-
-# 本机开发推荐启用 dev profile：启动时自动写入演示租户/角色/账号，开箱即可登录
-./mvnw -pl sable-app -am spring-boot:run -Dspring-boot.run.profiles=dev
+./scripts/dev-start.sh          # macOS / Linux
+.\scripts\dev-start.ps1         # Windows PowerShell
 ```
+
+加 `--help`（PowerShell 用 `-Help`）可看全部参数：只起后端 / 只起前端 / 跳过构建 /
+停止后端。可用 `SABLE_BACKEND_PORT`、`SABLE_FRONTEND_PORT` 改端口。
+
+**手工方式**：
+
+```bash
+# 构建启动模块及其依赖（跳过测试）
+./mvnw -pl sable-app -am -Dmaven.test.skip=true package
+
+# 运行。本机开发推荐启用 dev profile：启动时自动写入演示租户/角色/账号，开箱即可登录
+SPRING_PROFILES_ACTIVE=dev java -jar sable-app/target/sable-app-0.0.1-SNAPSHOT.jar --server.port=8080
+```
+
+> ⚠️ 不要用 `./mvnw -pl sable-app -am spring-boot:run`。`spring-boot:run` 属于
+> **直接目标调用**，会在 reactor 里的每个模块上都执行一遍；`-am` 又会把根聚合模块
+> 与 9 个兄弟模块一起拉进来，它们都没有主类，于是在第一个模块就报
+> `Unable to find a suitable main class`。要真用 `spring-boot:run`，得先把兄弟模块
+> `install` 进本地仓库、再单独对 `sable-app` 执行 —— 两步，日常不值得。
 
 或在 IDE 中直接运行 `me.kirara.sable.SableApplication`（工程已附带 `.run/SableApplication.run.xml` 运行配置，其中已激活 `dev` profile）。
 
