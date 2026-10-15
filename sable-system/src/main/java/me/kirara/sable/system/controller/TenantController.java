@@ -13,6 +13,7 @@ import me.kirara.sable.system.dto.TenantCreateRequest;
 import me.kirara.sable.system.dto.TenantUpdateRequest;
 import me.kirara.sable.system.entity.Tenant;
 import me.kirara.sable.system.service.TenantService;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,9 +24,23 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 租户管理接口 — /system/tenants */
+/**
+ * 租户管理接口 — /system/tenants
+ *
+ * <p>整类要求 {@code system:manage}。权限码经 {@code T(...)} 引用字典常量而非裸字符串
+ * （理由见 {@code me.kirara.sable.common.Permission}）。</p>
+ *
+ * <p><b>已知缺口（不属于本次改动范围）：</b>租户管理在语义上是**平台级**能力
+ * （{@code FR-6.1.4}「超级管理员可管理所有租户」），而角色是**租户内**的资产
+ * （{@code role.tenant_id}）。于是"某租户的超级管理员"持有 {@code system:manage}
+ * 之后同样能创建、停用、删除别的租户。用权限码补不上这个洞 ——
+ * 需要一个"平台级管理员"的身份概念（不属于任何租户，或带一个租户外的标记），
+ * 那是独立的一次设计决策。当前状态下它至少比改造前严格：
+ * 以前是**任何登录用户**都能做这些事。</p>
+ */
 @RestController
 @RequestMapping("/system/tenants")
+@PreAuthorize("hasAuthority(T(me.kirara.sable.common.Permission).SYSTEM_MANAGE)")
 public class TenantController {
 
     private final TenantService tenantService;

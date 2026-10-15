@@ -11,6 +11,7 @@ import me.kirara.sable.system.dto.RolePermissionRequest;
 import me.kirara.sable.system.dto.RoleSaveRequest;
 import me.kirara.sable.system.entity.Role;
 import me.kirara.sable.system.service.RoleService;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,9 +23,20 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** 角色管理接口 — /system/roles */
+/**
+ * 角色管理接口 — /system/roles
+ *
+ * <p>整类要求 {@code system:manage}：角色的增删改与权限授予，本身就是"改谁能做什么"，
+ * 属于系统管理动作。权限码经 {@code T(...)} 引用字典常量而非裸字符串（理由见
+ * {@code me.kirara.sable.common.Permission}）。</p>
+ *
+ * <p><b>已知缺口（不属于本次改动范围）：</b>下面几个方法没有校验"角色是否属于当前租户"，
+ * {@code list()} 也没有按租户过滤。也就是说，一个租户的管理员能看到并改动别的租户的角色。
+ * 这是数据范围问题，不是权限码能解决的 —— 需要先把"平台级管理员"这个概念定下来。</p>
+ */
 @RestController
 @RequestMapping("/system/roles")
+@PreAuthorize("hasAuthority(T(me.kirara.sable.common.Permission).SYSTEM_MANAGE)")
 public class RoleController {
 
     private final RoleService roleService;

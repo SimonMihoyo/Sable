@@ -18,6 +18,7 @@ import me.kirara.sable.system.dto.UserUpdateRequest;
 import me.kirara.sable.system.entity.SysUser;
 import me.kirara.sable.system.service.SysUserService;
 import me.kirara.sable.system.service.UserAuthorityService;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,9 +31,20 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** 用户管理接口 — /system/users */
+/**
+ * 用户管理接口 — /system/users
+ *
+ * <p><b>整类要求 {@code system:manage}</b>（用户的增删改、角色授予都是系统管理动作）。
+ * 唯一例外是 {@link #me()} —— 它读的是"当前登录者自己"，任何已认证用户都该能调，
+ * 因此单独用 {@code @PreAuthorize("isAuthenticated()")} 覆盖类级规则。
+ * 这条覆盖不是可选的：漏掉它，审计员一登录就会因为前端取不到自己而卡在登录页。</p>
+ *
+ * <p>权限码写成 {@code T(me.kirara.sable.common.Permission).XXX} 而不是裸字符串，
+ * 是为了让字典成为唯一事实来源 —— 拼错的权限码不会编译失败，只会让接口对所有人 403。</p>
+ */
 @RestController
 @RequestMapping("/system/users")
+@PreAuthorize("hasAuthority(T(me.kirara.sable.common.Permission).SYSTEM_MANAGE)")
 public class UserController {
 
     private final SysUserService sysUserService;
@@ -81,8 +93,13 @@ public class UserController {
      *
      * <p>剩下的未装配项是 {@code department}（数据范围权限的前提，见
      * {@code tenant_user.department}，目前只存不读）。</p>
+     *
+     * <p><b>这条 {@code @PreAuthorize} 覆盖掉了类级的 {@code system:manage}</b> ——
+     * 本接口是"看自己"，不该要求管理员权限。方法级注解优先于类级，这是 Spring Security
+     * 既有的优先级规则，不是这里额外写的逻辑。</p>
      */
     @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
     public R<UserResponse> me() {
         Long userId = UserContext.getUserId();
         if (userId == null) {

@@ -30,13 +30,14 @@ import java.util.List;
  * 认证服务实现。
  *
  * <p>已实现：登录主流程（查用户 → 状态与锁定校验 → BCrypt 校验密码 → 失败计数，
- * 达阈值锁定 → 成功则重置计数并签发双令牌）、刷新令牌（轮换签发）、修改密码
+ * 达阈值锁定 → 成功则重置计数并签发双令牌）、刷新令牌、修改密码
  * （校验旧密码 → 校验复杂度 → 比对当前密码与最近 N 次历史 → 更新哈希并留档）、
  * 登出吊销（按 jti 写入吊销表，见 {@link TokenRevocationService}）。
- * 令牌中装配租户与角色，归属关系由 {@link UserAuthorityService} 解析。</p>
+ * 令牌中装配租户、角色与**权限**，归属关系由 {@link UserAuthorityService} 解析 ——
+ * 其中权限声明（{@code perm}）正是接口级鉴权的判据，见
+ * {@code me.kirara.sable.common.Permission}。</p>
  *
- * <p>尚未实现：MFA 校验需引入 TOTP 依赖，目前对已开启 MFA 的账号明确拒绝而不是静默放行；
- * 令牌中的权限（perm）声明暂为空数组，待接口级鉴权落地时装配。</p>
+ * <p>尚未实现：MFA 校验需引入 TOTP 依赖，目前对已开启 MFA 的账号明确拒绝而不是静默放行。</p>
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -360,17 +361,30 @@ public class AuthServiceImpl implements AuthService {
     /**
      * 签发访问令牌与刷新令牌。
      *
-     * <p>每次签发都重新解析租户与角色归属，保证续期不会拖着过期的归属关系。
-     * 权限声明暂固定为空数组：{@code role.permissions} 是 JSONB 列，
-     * 要正确读出并解析需先处理类型映射，而权限的真正消费者（接口级鉴权）尚未实现，
-     * 现在装配容易装错形态 —— 留待鉴权落地时统一处理。此处仍写入空数组，
-     * 是为了让令牌形状与 API 设计文档 1.4 节一致，前端可以无条件读该字段。</p>
+     * <p>每次签发都重新解析租户、角色与权限归属 —— 刷新令牌时会重新查一遍库，
+     * 因此续期不会拖着一份过期的归属关系。</p>
+     *
+     * <p><b>权限放在令牌里，而不是每个请求回查数据库。</b>取舍如下：</p>
+     * <ul>
+     *   <li>放令牌：一次查询管 30 分钟（{@code sable.auth.access-token-ttl}），
+     *       每个请求零额外开销；代价是**改了角色最长 30 分钟才在接口校验上生效**。</li>
+     *   <li>每请求回查：即时生效，但每个请求都要多一次"租户成员 → 角色授予 → 角色"
+     *       的关联查询，且令牌里的 {@code perm} 声明会形同虚设。</li>
+     * </ul>
+     * <p>当前取前者。需要"撤权立刻生效"时，用 {@link TokenRevocationService}
+     * 吊销该用户的令牌即可（登出走的正是这条路），不必改成每请求回查。</p>
+     *
+     * <p>另注意前端展示与接口校验的取值时机会不同：{@code GET /system/users/me} 是按
+     * **数据库当前状态**装配的（见 {@code UserController.me}），所以菜单的可见性会立刻
+     * 跟着角色变化走，而接口拦截仍受上面那个 30 分钟窗口约束。表现为"刚给了权限，
+     * 菜单出来了但点进去仍 403"，此时重新登录（或等令牌过期）即可 ——
+     * 这是刻意的取舍，不是 bug。</p>
      */
     private LoginResponse issueTokens(SysUser user) {
         UserAuthority authority = userAuthorityService.resolve(user.getId());
 
         String accessToken = jwtUtil.issueAccessToken(user.getId(), user.getUsername(),
-                authority.getTenantId(), authority.getRoleNames(), List.of());
+                authority.getTenantId(), authority.getRoleNames(), authority.getPermissions());
         String refreshToken = jwtUtil.issueRefreshToken(user.getId());
 
         LoginResponse response = new LoginResponse();

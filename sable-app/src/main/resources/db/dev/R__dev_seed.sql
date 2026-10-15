@@ -77,10 +77,15 @@ SET name          = EXCLUDED.name,
 -- ---------------------------------------------------------------------------
 -- 2. 预置角色（is_system = TRUE：系统预置角色不允许删除）
 -- ---------------------------------------------------------------------------
--- 权限码**逐字取自 V1 中 role.permissions 列的注释样例**，不额外发明。
--- 提醒：接口级鉴权（@PreAuthorize 之类）与权限码字典都还没落地，此刻 permissions
--- 只是一份数据，不会真的拦住任何请求。前端可以先用它渲染菜单/按钮的可见性，
--- 等服务端真做校验时，这份数据就是现成的对照。
+-- 角色名与权限码**逐字取自两个权威出处**，不额外发明：
+--   · 角色名 —— FR-6.2.1 要求的五个，与 V1 中 role.name 列的注释一致；
+--   · 权限码 —— V1 中 role.permissions 列的注释样例，并在 Java 侧有对应常量类
+--               me.kirara.sable.common.Permission。
+--
+-- ⚠️ 这份 permissions 是**实际生效**的授权，不再是"摆着看的演示数据"：
+--    接口级鉴权已由 @PreAuthorize 落地，令牌的 perm 声明直接从这一列装出来。
+--    改这里的值 = 改权限；某角色缺一个码，它对应的接口就会对该角色 403。
+--    新增权限码时要在 Permission 里加常量（有测试比对两处是否一致）。
 INSERT INTO public.role (tenant_id, name, display_name, description, is_system, permissions)
 SELECT t.id, v.name, v.display_name, v.description, TRUE, v.permissions
 FROM public.tenant t
@@ -90,7 +95,16 @@ CROSS JOIN (VALUES
     ('COMPLIANCE_OFFICER', '合规管理员', '合规数据读写与报告导出，不含系统管理',
      '["data_source:read","data_source:write","audit_log:read","audit_log:export","assessment:read","assessment:write","report:read","report:export"]'::jsonb),
     ('AUDITOR',            '审计员',     '只读：查数据源、审计日志、评估与报告',
-     '["data_source:read","audit_log:read","assessment:read","report:read"]'::jsonb)
+     '["data_source:read","audit_log:read","assessment:read","report:read"]'::jsonb),
+    -- 数据管理员：管数据源与分类分级结果，能改评估结论，但**不能导出报告**
+    -- （导出是对外的合规证据，属合规管理员的职责），也不碰系统管理。
+    ('DATA_STEWARD',       '数据管理员', '数据源与分类分级的日常维护',
+     '["data_source:read","data_source:write","audit_log:read","assessment:read","assessment:write","report:read"]'::jsonb),
+    -- 只读用户：最低权限角色。刻意**不含 audit_log:read** ——
+    -- 审计日志本身是敏感数据（含谁在什么时候动了什么），只读用户不该看到它；
+    -- 需要看审计日志的是 AUDITOR，两个角色的区别正在这里。
+    ('VIEWER',             '只读用户',   '只读：数据源、评估与报告',
+     '["data_source:read","assessment:read","report:read"]'::jsonb)
 ) AS v(name, display_name, description, permissions)
 WHERE t.code = 'example_tech'
 ON CONFLICT (tenant_id, name) DO UPDATE
