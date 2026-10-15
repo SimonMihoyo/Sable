@@ -282,6 +282,26 @@ describe('responseInterceptors —— 令牌过期自动续期并重放', () => 
     expect(h.historyReplace).not.toHaveBeenCalled();
   });
 
+  /**
+   * 403 是服务端 `@PreAuthorize` 的拒绝。它的响应体仍是 `R` 结构（`{code: 40801}`），
+   * 所以必须按**业务错误**上抛 —— 否则 errorHandler 里那条"没有权限执行该操作"的分支
+   * 永远不会被走到，用户只会看到笼统的"请求失败（HTTP 403）"。
+   */
+  it('403 + code 40801 按业务错误上抛，好让提示走到「无权限」分支', async () => {
+    try {
+      await (await interceptor())(
+        res(403, { code: ErrorCode.FORBIDDEN, message: '无权限访问' }),
+      );
+      expect.unreachable('本应抛出异常');
+    } catch (error: any) {
+      expect(error.name).toBe('BizError');
+      expect(error.info.code).toBe(ErrorCode.FORBIDDEN);
+      // 原始响应仍要留着，调用方偶尔需要看状态码
+      expect(error.response.status).toBe(403);
+    }
+    expect(h.historyReplace).not.toHaveBeenCalled();
+  });
+
   /** 刷新接口自己失败时绝不能再触发刷新，否则是死循环。 */
   it('刷新接口自身的 401 不被当作令牌过期', async () => {
     saveTokens('old-access', 'old-refresh');

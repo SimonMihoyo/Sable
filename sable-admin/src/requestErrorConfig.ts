@@ -106,11 +106,29 @@ function isRefreshRequest(url?: string): boolean {
   return typeof url === 'string' && url.includes('/auth/refresh');
 }
 
-/** 把非 2xx 响应包装成 Error，交给上层的错误处理链（errorHandler 会据此弹提示）。 */
+/**
+ * 把非 2xx 响应包装成 Error，交给上层的错误处理链（errorHandler 会据此弹提示）。
+ *
+ * <p>带业务码的一律按**业务错误**上抛，而不是按 HTTP 错误：后端对部分客户端错误用真实
+ * 状态码（403 无权限 / 404 路径不存在 / 405 方法不支持 / 415 媒体类型），但响应体仍是
+ * 统一的 `R` 结构。若按 HTTP 错误处理，一次鉴权拒绝只会提示"请求失败（HTTP 403）"，
+ * 而上面 `errorHandler` 里那条"没有权限执行该操作"的分支永远不会被走到 ——
+ * 用户看到「失败」，却不知道是权限问题还是服务出了问题。</p>
+ */
 function buildHttpError(response: any): Error {
   const status = response?.status;
-  const message =
-    response?.data?.message ?? `请求失败（HTTP ${status ?? '未知'}）`;
+  const body = response?.data;
+
+  if (body && typeof body.code === 'number' && body.code !== ErrorCode.SUCCESS) {
+    const bizError: any = new Error(body.message ?? '请求失败');
+    bizError.name = 'BizError';
+    bizError.info = { code: body.code, message: body.message, data: body.data };
+    // 仍带上原始响应：调用方偶尔需要看状态码（例如按 403 单独埋点）
+    bizError.response = response;
+    return bizError;
+  }
+
+  const message = body?.message ?? `请求失败（HTTP ${status ?? '未知'}）`;
   const error: any = new Error(message);
   error.name = 'HttpError';
   error.response = response;
@@ -122,9 +140,10 @@ export const errorConfig: RequestConfig = {
     /**
      * 业务错误的"抛出"环节。
      *
-     * <p>后端约定是：**业务失败走 HTTP 200 + 非 0 `code`**，只有 404/405/415 这类框架级
-     * 错误才用真实 HTTP 状态码。所以这里以 `code` 为准 —— 响应体里没有 `code`
-     * （例如静态资源）就放行，不当作业务错误。</p>
+     * <p>后端约定是：**业务失败走 HTTP 200 + 非 0 `code`**；而 400/403/404/405/415 这类
+     * 客户端错误用真实 HTTP 状态码，响应体同样是 `R` 结构（见 `buildHttpError`）。
+     * 两种形态都以 `code` 为准 —— 响应体里没有 `code`（例如静态资源）就放行，
+     * 不当作业务错误。</p>
      */
     errorThrower: (res) => {
       const body = res as SableAPI.R<unknown> | undefined;
