@@ -100,6 +100,13 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # 必须先跑这一步，`tsc` 才能在干净的检出上过。
+      # `src/.umi/` 是 umi 生成的类型声明（已 gitignore），`@umijs/max` 的导出
+      # 全靠它——缺了它 tsc 会报一屏 "has no exported member 'history'" 这类假故障。
+      # AGENTS.md §5.5 有同样的提醒（本机报这个错时也是先跑 setup）。
+      - name: 生成 umi 类型声明
+        run: npx max setup
+
       # lint = biome lint + tsc --noEmit（见 package.json 的 scripts）。
       # 放在单测之前：类型错误往往比断言失败更容易解释"为什么挂了"。
       - name: 静态检查与类型检查

@@ -563,9 +563,12 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
 | job | 步骤 | 对应本地命令 |
 |-----|------|-------------|
 | 后端 | `./mvnw -B -ntp verify` → 断言 fat jar 内容 | 同名（`verify` 会额外打出 fat jar） |
-| 前端 | `npm ci` → `npm run lint` → `npm test` → `npm run build` | 见 §5.5 |
+| 前端 | `npm ci` → `npx max setup` → `npm run lint` → `npm test` → `npm run build` | 见 §5.5 |
 
 几个刻意的取舍：
+
+- **`npx max setup` 不能省**：`src/.umi/`（umi 生成的类型声明）是 gitignore 的，
+  干净的检出上不存在，没有它 `tsc` 会报一屏 `has no exported member 'history'` 的假故障。
 
 - **后端用 `verify` 而不是 `test`**，并且**额外拆开 jar 断言** `hibernate-validator` /
   `jakarta.validation-api` / `spring-security-core` 三个实现类在 `BOOT-INF/lib/` 里 ——
