@@ -556,6 +556,31 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
 返回 `code=0` 且带 `accessToken` 就说明 `/api` 前缀被正确剥掉并转发到了后端。
 拿到令牌后再打 `http://localhost:8000/api/system/users/me`，确认 `roles` / `permissions` 有值。
 
+### 5.6 CI（`.github/workflows/ci.yml`）
+
+推 `master` 与所有 PR 会跑两个并行 job，**这是唯一会自动执行的验证**——本地漏跑的东西它不会替你补：
+
+| job | 步骤 | 对应本地命令 |
+|-----|------|-------------|
+| 后端 | `./mvnw -B -ntp verify` → 断言 fat jar 内容 | 同名（`verify` 会额外打出 fat jar） |
+| 前端 | `npm ci` → `npm run lint` → `npm test` → `npm run build` | 见 §5.5 |
+
+几个刻意的取舍：
+
+- **后端用 `verify` 而不是 `test`**，并且**额外拆开 jar 断言** `hibernate-validator` /
+  `jakarta.validation-api` / `spring-security-core` 三个实现类在 `BOOT-INF/lib/` 里 ——
+  这是 §2 那个「`provided` 只保证编译可见」的坑唯一的自动防线：少了它们，编译过、单测过、
+  启动也正常，功能却静默失效。加新 starter 到库模块（`provided`）时，记得同步这条断言。
+- **没有 `services: postgres`**：现有测试全是纯单测（无 `@SpringBootTest` / Testcontainers），
+  不连库。将来加集成测试请优先用 Testcontainers（测试自带库），别往 workflow 里塞 service。
+- **前端必须过 `tsc` 与 `build`**：`vitest` 只加载被测模块，路由配置错误、按需加载写错这类问题
+  只有生产构建能发现。
+- action 全部钉在 `@v4`（`checkout` / `setup-java` / `setup-node` / `upload-artifact`）。
+  升级大版本前先确认 runner 镜像的 Node 运行时已跟上。
+
+**CI 覆盖不到**（需要真库或真接口，仍按 §5.1–§5.4 手工验）：Flyway 迁移能否从空库建起来、
+多租户 schema 建表与路由、JSONB 真实写入、OpenAPI 与前端 `services/` 的一致性。
+
 ---
 
 ## 6. 当前状态与禁区
@@ -585,6 +610,8 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
   用户能看到本租户的**全部**数据，而需求要求"只能看到本部门/本业务线的数据"。
 - **RLS 是空转**：`tenant_{id}` 下的表虽然 `ENABLE ROW LEVEL SECURITY`，但没有 POLICY、
   对表属主也不生效。**它不是隔离手段**，真正的隔离靠 schema 路由（§3.8）。
+- **CI 只跑单测与构建，跑不到"要真库"的东西**：Flyway 从空库建全量、多租户 schema 路由、
+  JSONB 真实写入，这几样在流水线里都是绿的也说明不了问题（见 §5.1–§5.4）。
 - **结构化 JSON 日志未做**；集中日志平台与访问日志也未做。
 - `report` / `report_schedule` 两张表缺失（`sable-report` 已有实体与 Mapper）。
 - `audit_log` 的分区只补了"下个月"，且**无分区时写入会直接失败**（权宜之计）。
@@ -610,6 +637,8 @@ curl -s --noproxy '*' -X POST http://localhost:8000/api/auth/login \
 - [ ] 改了 JSONB 相关代码时，已按 §5.4 打**真实接口**验证（只跑单测不算 —— 那个坑踩过）
 - [ ] 日志走 SLF4J，没有 `System.out`，没有给 mybatis-plus 配 `log-impl`
 - [ ] `./mvnw -q -DskipTests compile` 通过
+- [ ] 改动都过得了 CI（`./mvnw -B verify` + 前端的 lint / test / build，见 §5.6）；
+      本地跑不起来时别只跑编译就提交 —— 绿的那一步正是 CI 的全部内容
 - [ ] 改了 `scripts/dev-start.sh` 时，`scripts/dev-start.ps1` 已同步改（两版功能对等；
       ps1 必须存成 **UTF-8 with BOM**，否则 PowerShell 5.1 按 GBK 读会乱码）
 - [ ] 没有改动与本任务无关的文件

@@ -1,0 +1,134 @@
+name: CI
+
+# 触发范围：
+# - 推到 master 必须过（配合分支保护可挡住"直接推坏的代码"）
+# - 所有 PR 都要过（在合并前拦住）
+# - workflow_dispatch 留一个手动按钮，方便排查"到底是代码问题还是环境问题"
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# 最小权限：CI 只读仓库。以后要发版/推镜像时，在那个 workflow 里单独提权，
+# 不要把 write 权限写在这里——一旦 workflow 文件被改，token 就是现成的攻击面。
+permissions:
+  contents: read
+
+# 同一个分支连着推两次时，取消上一次还在跑的任务：
+# 结果以最后一次提交为准，省 runner 额度，也让状态页不出现"旧的失败"误导。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端 · 编译 + 单测
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 用 temurin 而不是默认的 zulu：本项目 pom 里 java.version=17，
+      # 与开发机上的 Temurin 17 保持同一个 JVM 实现，减少"本地过、CI 不过"。
+      # cache: maven 会把 ~/.m2 按 pom 哈希缓存，第二次起省掉绝大部分下载时间。
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # `verify` 而不是 `test`：除了跑单测，还会执行 package，
+      # 真正装配出 sable-app 的 fat jar。
+      - name: 编译并运行单测
+        run: ./mvnw -B -ntp verify
+
+      # 断言 fat jar 里确实有那几个「以 provided 声明在库模块」的实现。
+      # 这是 AGENTS.md §2 记过的坑：provided 只保证编译可见、不参与打包，
+      # 若 sable-app 忘了引入，编译过、单测过、启动也正常，但功能静默失效
+      # （历史上 14 个 @Valid 接口的校验注解全部变成装饰品）。
+      # 单测抓不到这个，只有拆开 jar 看才知道，所以在这里显式检查一次。
+      - name: 检查 fat jar 未丢失 provided 依赖的实现
+        run: |
+          jarball=$(ls sable-app/target/sable-app-*.jar | head -1)
+          echo "检查 $jarball"
+          missing=0
+          for lib in hibernate-validator jakarta.validation-api spring-security-core; do
+            if unzip -l "$jarball" | grep -q "BOOT-INF/lib/${lib}"; then
+              echo "  ok  $lib"
+            else
+              echo "::error::fat jar 里缺 ${lib} —— 该 starter 可能只在库模块声明为 provided，sable-app 未引入（见 AGENTS.md §2）"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      # 失败时把 surefire 报告带出来：日志里只有一句 "Tests run: X, Failures: 1"，
+      # 到底是哪个断言、哪行栈，得看这份 XML/文本报告。
+      - name: 上传测试报告（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend:
+    name: 前端 · 静态检查 + 单测 + 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # 前端在子目录里，所有 run 步骤都从这里开始，省得每行都 cd
+        working-directory: sable-admin
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 版本取 22：与开发机一致。package-lock.json 已入库，
+      # npm ci 严格按锁文件装（不解析 ^ 范围），保证 CI 装到的依赖与本地可复现。
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sable-admin/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      # lint = biome lint + tsc --noEmit（见 package.json 的 scripts）。
+      # 放在单测之前：类型错误往往比断言失败更容易解释"为什么挂了"。
+      - name: 静态检查与类型检查
+        run: npm run lint
+
+      - name: 运行单测
+        run: npm test
+
+      # 生产构建是唯一能验证"路由配置 / 按需加载 / 产物体积"的地方，
+      # 单测和 tsc 都覆盖不到（它们只加载被测模块）。
+      - name: 生产构建
+        run: npm run build
+
+      # 构建产物留着，方便出问题时下载下来在本地起 preview 复现
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: sable-admin-dist
+          path: sable-admin/dist
+          retention-days: 7
+
+# ── 为什么这里没有 database service ──────────────────────────────
+# 后端的 49 个测试全部是纯单测（Mockito + 手搭对象），没有任何
+# @SpringBootTest / Testcontainers —— 它们不连数据库、不起 Spring 上下文。
+# 所以无需 `services: postgres`；等将来引入真的集成测试再加，
+# 那时也应当优先用 Testcontainers（测试自带库，不依赖 workflow 的 service 配置）。
+#
+# ── 这份 workflow 覆盖不到什么 ──────────────────────────────────
+# 1. Flyway 迁移的正确性：迁移只在应用启动时执行，CI 里没有库，跑不到。
+#    V1 一旦被改过（见 AGENTS.md §6 的 Flyway 校验和盲区），这里不会报错。
+# 2. 多租户 schema 的建表与路由：同样需要真库。
+# 3. 接口契约（OpenAPI）与前端 services 的一致性：目前靠人。
