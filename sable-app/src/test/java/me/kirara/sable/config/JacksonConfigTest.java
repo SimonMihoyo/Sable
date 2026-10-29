@@ -1,6 +1,7 @@
 package me.kirara.sable.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import me.kirara.sable.discovery.entity.DataSource;
 import me.kirara.sable.system.entity.SysUser;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,22 @@ class JacksonConfigTest {
         public SysUser getUser() {
             return user;
         }
+    }
+
+    @Test
+    @DisplayName("直接序列化数据源实体时 passwordEnc 被忽略")
+    void dataSourcePasswordCiphertextIgnored() throws Exception {
+        DataSource source = new DataSource();
+        source.setId(7L);
+        source.setName("生产库-用户中心");
+        // 1..12 的 Base64 是 AQIDBAUGBwgJCgsM —— 断言这段不出现，才是真的没序列化
+        source.setPasswordEnc(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+
+        String json = configuredObjectMapper().writeValueAsString(source);
+
+        assertFalse(json.contains("passwordEnc"), "实体序列化不得含 passwordEnc: " + json);
+        assertFalse(json.contains("AQIDBAUGBwgJCgsM"), "口令密文不得出现在 JSON 里: " + json);
+        assertTrue(json.contains("\"name\":\"生产库-用户中心\""), json);
     }
 
     /**

@@ -31,6 +31,20 @@
 			<groupId>com.baomidou</groupId>
 			<artifactId>mybatis-plus-spring-boot3-starter</artifactId>
 		</dependency>
+
+		<!--
+			接口级鉴权的注解来源（@PreAuthorize），与 sable-system 的声明方式一致。
+
+			scope 取 provided：库模块只需要编译期看得见这个注解，真正的鉴权实现
+			（SecurityFilterChain、方法级鉴权管理器）由启动模块通过
+			spring-boot-starter-security 提供。provided 不传递依赖，
+			因此不会把 Spring Security 带给下游模块的运行时。
+		-->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-core</artifactId>
+			<scope>provided</scope>
+		</dependency>
 	</dependencies>
 
 </project>

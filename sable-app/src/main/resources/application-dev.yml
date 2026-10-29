@@ -21,6 +21,14 @@ spring:
     locations: classpath:db/migration,classpath:db/dev
 
 sable:
+  discovery:
+    # 本地开发用的数据源口令加密密钥（AES-256，Base64 编码的 32 字节）。
+    #
+    # ⚠️ 仅供本地：这个值写在仓库里，等于公开。生产不加载本 profile，
+    #    缺 SABLE_DISCOVERY_CRYPTO_KEY 时启动会直接失败（见 application.yml）。
+    #    本地换过密钥后，旧的口令解不开 —— 重建库或删掉 data_source、重录一次即可。
+    crypto-key: "${SABLE_DISCOVERY_CRYPTO_KEY:c2FibGUtZGV2LWRpc2NvdmVyeS1rZXktMzItYnl0ZXM=}"
+
   tenant:
     # 启动时给库里已有的租户补齐 schema 与业务表。
     # 开发环境必须打开：种子数据（db/dev/R__dev_seed.sql）只写 public 下的 9 张公共表，

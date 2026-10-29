@@ -1,6 +1,7 @@
 package me.kirara.sable.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import me.kirara.sable.discovery.entity.DataSource;
 import me.kirara.sable.system.entity.SysUser;
 import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -30,7 +31,9 @@ public class JacksonConfig {
      */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer credentialFieldsIgnoredCustomizer() {
-        return builder -> builder.mixIn(SysUser.class, SysUserCredentialMixin.class);
+        return builder -> builder
+                .mixIn(SysUser.class, SysUserCredentialMixin.class)
+                .mixIn(DataSource.class, DataSourceCredentialMixin.class);
     }
 
     /**
@@ -47,5 +50,19 @@ public class JacksonConfig {
         /** TOTP 密钥，绝不序列化。 */
         @JsonIgnore
         abstract String getMfaSecret();
+    }
+
+    /**
+     * {@link DataSource} 的序列化视图 —— 口令密文绝不序列化。
+     *
+     * <p>正常出口是 {@code DataSourceResult} 投影，这层兜底防的是"又有人直接返回实体"。
+     * 密文本身解不开，但把与凭证相关的字节发到浏览器这件事不该发生，也不该等到
+     * 换密钥那天才发现某个接口一直在吐它。</p>
+     */
+    abstract static class DataSourceCredentialMixin {
+
+        /** AES-GCM 口令密文，绝不序列化。 */
+        @JsonIgnore
+        abstract byte[] getPasswordEnc();
     }
 }

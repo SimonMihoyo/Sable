@@ -20,10 +20,18 @@ public class DataSource extends BaseEntity {
     private Integer port;
     private String databaseName;
     private String username;
-    /** pgcrypto 加密后的密码 */
+    /** AES-256-GCM 密文（应用侧加密，密钥由启动模块注入，见 DataSourceCipher） */
     private byte[] passwordEnc;
     private String jdbcOptions;
     private String groupName;
+    /**
+     * 分组排序权重：越小越靠前。
+     *
+     * <p>排序挂在每行上而不是单独的分组表上 —— 分组目前是 {@code group_name} 的派生概念，
+     * 没有独立生命周期。同一分组的所有行必须保持同值，由服务层维护；读取时按
+     * {@code MIN(group_sort)} 排序，容忍个别行被手工改坏。本字段不对外暴露。</p>
+     */
+    private Integer groupSort;
     private String description;
     /** ACTIVE / INACTIVE / ERROR / TESTING */
     private String status;
@@ -33,6 +41,12 @@ public class DataSource extends BaseEntity {
     private String scanErrorMsg;
     private Long createdBy;
     private LocalDateTime deletedAt;
+    /** 定时扫描 cron（6 段：秒 分 时 日 月 周）；未配置时为空 */
+    private String scheduleCron;
+    /** 是否启用定时扫描 */
+    private Boolean scheduleEnabled;
+    /** 下次执行时间；关闭时为空，每次触发后推进 */
+    private LocalDateTime scheduleNextRunAt;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -54,6 +68,8 @@ public class DataSource extends BaseEntity {
     public void setJdbcOptions(String jdbcOptions) { this.jdbcOptions = jdbcOptions; }
     public String getGroupName() { return groupName; }
     public void setGroupName(String groupName) { this.groupName = groupName; }
+    public Integer getGroupSort() { return groupSort; }
+    public void setGroupSort(Integer groupSort) { this.groupSort = groupSort; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
     public String getStatus() { return status; }
@@ -68,4 +84,10 @@ public class DataSource extends BaseEntity {
     public void setCreatedBy(Long createdBy) { this.createdBy = createdBy; }
     public LocalDateTime getDeletedAt() { return deletedAt; }
     public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
+    public String getScheduleCron() { return scheduleCron; }
+    public void setScheduleCron(String scheduleCron) { this.scheduleCron = scheduleCron; }
+    public Boolean getScheduleEnabled() { return scheduleEnabled; }
+    public void setScheduleEnabled(Boolean scheduleEnabled) { this.scheduleEnabled = scheduleEnabled; }
+    public LocalDateTime getScheduleNextRunAt() { return scheduleNextRunAt; }
+    public void setScheduleNextRunAt(LocalDateTime scheduleNextRunAt) { this.scheduleNextRunAt = scheduleNextRunAt; }
 }

@@ -151,6 +151,26 @@ sable:
       # 生产环境务必用 SABLE_CORS_ALLOWED_ORIGIN_PATTERNS 覆盖为真实域名，不要沿用默认值。
       allowed-origin-patterns: "${SABLE_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:[*],http://127.0.0.1:[*]}"
 
+  # 数据资产发现（对应 me.kirara.sable.config.DiscoveryCryptoConfig）
+  discovery:
+    # 数据源口令的加密密钥 —— AES-256-GCM，Base64 编码的 32 字节。
+    #
+    # 生产**必须**用环境变量 SABLE_DISCOVERY_CRYPTO_KEY 注入，这里刻意不给默认值：
+    # 没有密钥就写不了 data_source.password_enc（该列 NOT NULL），数据源新增会全部 500。
+    # 与其带着"看起来正常、一用就坏"的配置跑起来，不如启动时就失败。
+    # 密钥丢了 = 已存的口令全部解不开，只能让租户重新录入口令；更换密钥需要一次数据迁移。
+    crypto-key: "${SABLE_DISCOVERY_CRYPTO_KEY:}"
+
+    # 定时扫描调度（对应 me.kirara.sable.task.ScanScheduleJob）
+    schedule:
+      # 调度开关。默认开；关闭后所有 cron 配置保留但不再触发（排查环境问题时可临时关）
+      enabled: "${SABLE_DISCOVERY_SCHEDULE_ENABLED:true}"
+      # 轮询间隔（毫秒）：调度不是按秒精确触发的，触发精度等于这个值。
+      # 扫描通常按天/小时配置，30 秒的偏差可以接受；调小会增加数据库查询频率。
+      poll-interval: "${SABLE_DISCOVERY_SCHEDULE_POLL_INTERVAL:30000}"
+      # 启动后首次轮询的延迟（毫秒）：避开应用启动期的 schema 补齐与迁移
+      initial-delay: "${SABLE_DISCOVERY_SCHEDULE_INITIAL_DELAY:30000}"
+
   # 定时任务
   task:
     # 清理已过期的令牌吊销记录（6 段 cron：秒 分 时 日 月 周），默认每天 03:30
