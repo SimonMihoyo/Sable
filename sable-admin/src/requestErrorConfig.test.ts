@@ -166,18 +166,64 @@ describe('responseInterceptors —— 令牌过期自动续期并重放', () => 
       code: ErrorCode.SUCCESS,
       data: { accessToken: 'new-access', refreshToken: 'new-refresh' },
     });
-    h.requestMock.mockResolvedValue({ code: 0, data: [{ id: 1 }] });
+    // 重放用的是 getResponse: true，所以 request() 交回的是**完整响应**（含 .data）
+    const replayed = { status: 200, data: { code: 0, data: [{ id: 1 }] } };
+    h.requestMock.mockResolvedValue(replayed);
 
     const result = await (await interceptor())(res(401, { code: 401 }));
 
     expect(h.refreshMock).toHaveBeenCalledTimes(1);
     expect(h.requestMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ code: 0, data: [{ id: 1 }] });
+    // 原样交回 axios 响应 —— 让 umi 的 request 去 .data 一层，调用方才会拿到 R 结构。
+    // 若这里返回的是已经 .data 过的响应体，调用方会被再 .data 一次，拿到 R 里层的对象，
+    // 于是 `res.code === 0` 恒为假（刷新页面后掉登录就是这么来的）。
+    expect(result).toBe(replayed);
     // 后端轮换签发：两个令牌都要更新
     expect(getAccessToken()).toBe('new-access');
     expect(getRefreshToken()).toBe('new-refresh');
-    // 重放时打上标记，避免无限循环
-    expect((h.requestMock.mock.calls[0][1] as any)._retried).toBe(true);
+  });
+
+  /**
+   * 重放必须"要回完整响应"并带上 `_retried`。
+   *
+   * <p>前者见上一条；`_retried` 用来保证每个请求最多重放一次。</p>
+   */
+  it('重放时请求 getResponse: true 并打上 _retried 标记', async () => {
+    saveTokens('old-access', 'old-refresh');
+    h.refreshMock.mockResolvedValue({
+      code: ErrorCode.SUCCESS,
+      data: { accessToken: 'new-access', refreshToken: 'new-refresh' },
+    });
+    h.requestMock.mockResolvedValue({ status: 200, data: { code: 0 } });
+
+    await (await interceptor())(res(401));
+
+    const opts = h.requestMock.mock.calls[0][1] as any;
+    expect(opts.getResponse).toBe(true);
+    expect(opts._retried).toBe(true);
+  });
+
+  /**
+   * 重放前必须摘掉旧的 `Authorization`。
+   *
+   * <p>不摘就等于拿**刚过期的那枚令牌**重放（请求拦截器只在"没有 Authorization"时才
+   * 注入新令牌），结果必然是再 401 → 判定"新令牌也被拒" → 直接登出。用户表现为
+   * "令牌没过期时好好的，一过期就被踢下线"。</p>
+   */
+  it('重放时摘掉旧的 Authorization 头，好让请求拦截器注入新令牌', async () => {
+    saveTokens('old-access', 'old-refresh');
+    h.refreshMock.mockResolvedValue({
+      code: ErrorCode.SUCCESS,
+      data: { accessToken: 'new-access', refreshToken: 'new-refresh' },
+    });
+    h.requestMock.mockResolvedValue({ status: 200, data: { code: 0 } });
+
+    await (await interceptor())(
+      res(401, {}, { headers: { Authorization: 'Bearer old-access' } }),
+    );
+
+    const opts = h.requestMock.mock.calls[0][1] as any;
+    expect(opts.headers?.Authorization).toBeUndefined();
   });
 
   it('HTTP 200 + code 40002 也走续期（两种形态都要认）', async () => {
@@ -206,14 +252,19 @@ describe('responseInterceptors —— 令牌过期自动续期并重放', () => 
       code: ErrorCode.SUCCESS,
       data: { accessToken: 'new-access', refreshToken: 'new-refresh' },
     });
-    h.requestMock.mockResolvedValue({ code: 0, data: { username: 'alice' } });
+    const replayed = {
+      status: 200,
+      data: { code: 0, data: { username: 'alice' } },
+    };
+    h.requestMock.mockResolvedValue(replayed);
 
     const result = await (await interceptor())(
       res(401, { code: ErrorCode.TOKEN_INVALID, message: '缺少访问令牌' }),
     );
 
     expect(h.refreshMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ code: 0, data: { username: 'alice' } });
+    // 交回完整响应：调用方（getInitialState 的 /me）要能读到 data.code === 0
+    expect(result).toBe(replayed);
     expect(h.historyReplace).not.toHaveBeenCalled();
   });
 
