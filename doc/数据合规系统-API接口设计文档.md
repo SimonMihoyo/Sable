@@ -712,6 +712,9 @@ DELETE /discovery/sources/{id}
 POST /discovery/sources/{id}/test
 ```
 
+用库里存的口令解密后**真正连一次**目标库，超时约 5 秒。需要 `data_source:write` 权限
+（这个动作会用凭证访问外部系统）。
+
 **响应：**
 
 ```json
@@ -720,18 +723,66 @@ POST /discovery/sources/{id}/test
   "data": {
     "success": true,
     "message": "连接成功",
-    "serverVersion": "MySQL 8.0.35",
-    "responseTimeMs": 45
+    "serverVersion": "PostgreSQL 16.15",
+    "durationMs": 45
   }
 }
 ```
 
+**语义：**
+
+- **连接失败不是接口错误**：仍返回 `code=0`，由 `success=false` + `message` 表达原因
+  （客户端要展示的是"连不上 + 为什么"，不是一个异常弹窗）。数据源不存在才是错误 40201。
+- 探测成功把数据源 `status` 写成 `ACTIVE`，失败写成 `ERROR`。
+- 当前支持 **PostgreSQL / MySQL**（两者都内置了驱动与方言）。
+  Oracle / SQL Server 会返回"暂不支持 XXX 类型的连接（当前支持 MYSQL / POSTGRESQL）"，
+  MongoDB / Redis 同样不支持；**这种情况不改数据源状态**
+  （环境缺能力不该把租户的数据源标成异常）。
+- MySQL 常见连接参数（写进 `jdbcOptions`）：自建库/无 TLS 时用
+  `useSSL=false&allowPublicKeyRetrieval=true`（caching_sha2_password 首次认证需要取公钥）；
+  云数据库按厂商要求配 `useSSL=true` 与证书参数。
+- `message` 与 `serverVersion` 不含口令，也不回显完整连接串。
+
 ### 5.7 数据源分组管理
 
+分组是 `data_source.group_name` 的**派生**概念：没有数据源就没有分组，也没有独立的分组表。
+
+#### 5.7.1 查询分组列表
+
 ```
-GET  /discovery/sources/groups          ← 查询分组列表
-PUT  /discovery/sources/groups/reorder  ← 调整分组排序
+GET /discovery/sources/groups
 ```
+
+**响应：** 分组名数组，按分组顺序排列（顺序落在 `data_source.group_sort` 上，
+同一分组的所有行同值；未填分组的数据源不出现在这里）。
+
+```json
+{
+  "code": 0,
+  "data": ["生产环境", "测试环境", "开发环境"]
+}
+```
+
+#### 5.7.2 调整分组顺序
+
+```
+PUT /discovery/sources/groups/reorder
+```
+
+**请求体：** 分组名数组，按期望的显示顺序排列。
+
+```json
+["测试环境", "生产环境"]
+```
+
+**语义：**
+
+- 数组里的分组按顺序排在前面；**未出现在数组里的分组保持原有相对顺序、排在后面**；
+- 整组会被重新编号（0..n-1），不做局部覆盖 —— 否则会和未改动过的分组并列，
+  并列时只剩"按名称"这一条兜底规则，用户看到的顺序会莫名其妙；
+- 不存在的分组名直接忽略，不报错（前端提交时可能刚删掉一个组）；
+- 新分组不必先创建 —— 新增或更新数据源时带上 `groupName` 即自动出现，
+  排序值排在现有分组之后；把数据源挪进已有分组时，该行对齐目标分组的排序值。
 
 ---
 
@@ -758,12 +809,36 @@ POST /discovery/sources/{sourceId}/scans
 {
   "code": 0,
   "data": {
-    "taskId": 5001,
+    "id": 5001,
+    "sourceId": 101,
+    "name": "生产库-用户中心 扫描",
+    "scanType": "FULL",
+    "triggerType": "MANUAL",
     "status": "PENDING",
-    "createdAt": "2026-09-08T10:30:00+08:00"
+    "createdBy": 1,
+    "createdAt": "2026-09-08T10:30:00.123456"
   }
 }
 ```
+
+**语义：**
+
+- **异步执行**：接口只负责落库并提交任务，立即返回 `PENDING`；后续用
+  `GET /discovery/scans/{taskId}` 轮询。状态机：
+  `PENDING → RUNNING → COMPLETED / FAILED / CANCELLED`。
+- 同一数据源同一时刻**只允许一个未结束的任务**（`PENDING` / `RUNNING`），
+  再次提交返回 `code=2` 并提示先等待或取消 —— 两个扫描同时写同一批资产行会互相覆盖。
+- 执行成功：`totalSchemas` / `totalTables` / `totalColumns` 写入统计，
+  数据源 `lastScanAt` / `lastScanStatus=SUCCESS` 同步更新。
+- 执行失败：任务 `status=FAILED`，`errorMessage` 记一句原因（不写堆栈），
+  数据源 `lastScanStatus=FAILED` + `scanErrorMsg`。
+- 扫描只刷新**结构信息**（类型、长度、是否主键、注释…），
+  **不覆盖**已有的人工分级（`sensitivity` / `category` / `manualOverride` 等）；
+  系统 schema（`pg_*` / `information_schema`）不进入资产清单。
+- 当前支持 **PostgreSQL / MySQL**。MySQL 的扫描范围是数据源里配置的那个库
+  （MySQL 没有 schema，库即 catalog）：同实例的其他库请另建数据源 —— 这也符合
+  最小权限，扫描账号通常只被授权到业务库。Oracle / SQL Server / MongoDB / Redis
+  暂不支持，任务会被直接置为 `FAILED` 并写明原因。
 
 ### 6.2 查询扫描任务列表
 
@@ -784,21 +859,25 @@ GET /discovery/scans/{taskId}
   "code": 0,
   "data": {
     "id": 5001,
+    "name": "生产库-用户中心 扫描",
     "sourceId": 101,
-    "sourceName": "生产库-用户中心",
     "scanType": "FULL",
     "triggerType": "MANUAL",
     "status": "COMPLETED",
     "totalSchemas": 3,
     "totalTables": 45,
     "totalColumns": 380,
-    "sensitiveFound": 67,
-    "startedAt": "2026-09-08T10:30:05+08:00",
-    "completedAt": "2026-09-08T10:31:22+08:00",
-    "createdBy": "admin"
+    "sensitiveFound": null,
+    "startedAt": "2026-09-08T10:30:05.001",
+    "completedAt": "2026-09-08T10:31:22.940",
+    "createdBy": 1
   }
 }
 ```
+
+> 响应是 `scan_task` 实体本身：没有 `sourceName`（要显示名字需按 `sourceId` 另查），
+> `createdBy` 是用户 ID 而不是用户名，`sensitiveFound` 属于分类分级阶段（ID 21/22）的产出，
+> 当前扫描不填。
 
 ### 6.4 配置定时扫描
 
@@ -811,16 +890,38 @@ PUT /discovery/sources/{sourceId}/schedule
 ```json
 {
   "enabled": true,
-  "cronExpression": "0 0 2 * * ?",
-  "scanType": "INCREMENTAL"
+  "cronExpression": "0 0 2 * * *"
 }
 ```
+
+**语义：**
+
+- 每个数据源**最多一个**定时扫描，配置存在 `data_source` 上
+  （`schedule_cron` / `schedule_enabled` / `schedule_next_run_at`）。
+- cron 支持 **6 段**（秒 分 时 日 月 周）与 **5 段**（自动补秒位，等价于 crontab 习惯）；
+  统一存成 6 段。`?` 可用（Spring 6 里与 `*` 等价）。非法表达式返回 `code=2` 并附示例。
+- `enabled=true` 时 `cronExpression` 必填；`enabled=false` 可不传 cron（保留原表达式、只关闭）。
+- 调度由服务端每 `sable.discovery.schedule.poll-interval`（默认 30 秒）轮询一次：
+  到期即提交一个 `triggerType=SCHEDULED` 的扫描任务（与手工扫描走同一条异步链路）。
+  因此**触发精度是轮询间隔**，不是秒级精确。
+- 停机期间错过的槽位**只补一次**（不会把积压的 N 个时间点全部回放）；
+  若到期时该数据源已有扫描在跑，这一轮跳过并记日志，下一轮按新槽位继续。
+- 配置与下次执行时间可从 `GET /discovery/sources/{id}` 读回：
+  `scheduleCron` / `scheduleEnabled` / `scheduleNextRunAt`。
 
 ### 6.5 取消扫描任务
 
 ```
 POST /discovery/scans/{taskId}/cancel
 ```
+
+**语义：**
+
+- 只对 `PENDING` / `RUNNING` 生效；重复取消（已是 `CANCELLED`）视为幂等成功。
+- 任务已 `COMPLETED` / `FAILED` 时返回 `code=2`（"任务已结束，无法取消"）。
+- 执行线程在每个 schema / 表之间检查状态，尽快停下；**取消后的完成/失败结果不会
+  覆盖 `CANCELLED`**（状态写入都带 `WHERE status = 'RUNNING'` 条件）。
+- 取消后数据源 `lastScanStatus` 记为 `PARTIAL` —— 资产可能只写入了一部分。
 
 ---
 
@@ -981,7 +1082,7 @@ PUT /classify/rules/{id}/status
 DELETE /classify/rules/{id}
 ```
 
-> 内置规则 (`is_builtin=true`) 不可删除。
+> 内置规则 (`is_builtin=true`) 不可删除，只能停用（`PUT /classify/rules/{id}/status`）。
 
 ### 8.7 规则测试
 
@@ -989,14 +1090,20 @@ DELETE /classify/rules/{id}
 POST /classify/rules/test
 ```
 
+对**当前租户全部启用中的规则**跑一次识别，返回命中的规则（按 `priority` 从高到低）。
+不是"只测某一条规则"——传 `ruleId` 测单条没有对应的实现，接口按字段信息匹配整个规则库。
+
 **请求体：**
 
 ```json
 {
-  "ruleId": 1,
-  "testValues": ["110101199001011234", "abc123", "13800138000"]
+  "columnName": "user_phone",
+  "columnComment": "用户手机号",
+  "samples": ["13800138000"]
 }
 ```
+
+`columnName` / `columnComment` / `samples` 均可选，但至少传一个；三者都空时返回空数组。
 
 **响应：**
 
@@ -1004,12 +1111,28 @@ POST /classify/rules/test
 {
   "code": 0,
   "data": [
-    { "value": "110101199001011234", "matched": true },
-    { "value": "abc123", "matched": false },
-    { "value": "13800138000", "matched": false }
+    {
+      "ruleId": 12,
+      "ruleName": "手机号识别",
+      "category": "个人基本信息",
+      "sensitivity": "PI"
+    }
   ]
 }
 ```
+
+**匹配语义（与内置规则一致）：**
+
+| matchType | pattern 形态 | 命中条件 |
+|---|---|---|
+| `KEYWORD` | JSON 数组 `["手机号","mobile"]` | 任一关键词出现在字段名 / 注释 / 采样值中（大小写不敏感） |
+| `REGEX` | 正则字符串 | 正则对字段名 / 注释 / 采样值 `find()` 命中 |
+| `COMPOSITE` | `{"regex":"...","keywords":[...],"min_match":n}` | 正则命中记 1 分、关键词命中记 1 分，达到 `min_match`（默认 2） |
+| `SAMPLE` | 正则字符串 | **只**对采样值匹配；没有采样值时不命中 |
+
+单条规则写坏（正则/JSON 非法）只跳过这一条并记 WARN，不影响其他规则。
+内置规则共 **40 条**（建租户时随 `db/tenant/V5__builtin_classify_rules.sql` 写入），
+覆盖个人基本信息、身份信息、生物特征、财务信息、健康医疗、位置信息、账号凭证、企业机密等分类。
 
 ### 8.8 查询分类分级标准
 
