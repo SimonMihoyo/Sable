@@ -1,4 +1,4 @@
-﻿import type { RequestOptions } from '@@/plugin-request/request';
+import type { RequestOptions } from '@@/plugin-request/request';
 import type { RequestConfig } from '@umijs/max';
 import { history, request } from '@umijs/max';
 import { message } from 'antd';
@@ -77,6 +77,50 @@ async function doRefresh(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * 把待重放的请求头拷成普通对象，并**摘掉 `Authorization`**。
+ *
+ * <p>重放用的是"刷新之前那份 config"，里面带着**刚过期的那枚令牌**（请求拦截器把它
+ * 写进了 `config.headers`，axios 又会随响应把这份 config 原样带回）。而请求拦截器只在
+ * "没有 Authorization"时才注入，所以不摘掉的话，重放发出去的仍是旧令牌 —— 必然再 401，
+ * 随后按 `_retried` 分支判定"新令牌也被拒"，直接把用户登出。</p>
+ */
+function headersWithoutAuthorization(headers: any): Record<string, any> {
+  const source =
+    typeof headers?.toJSON === 'function' ? headers.toJSON() : (headers ?? {});
+  const result: Record<string, any> = {};
+  Object.keys(source ?? {}).forEach((key) => {
+    if (key.toLowerCase() !== 'authorization') {
+      result[key] = (source as Record<string, any>)[key];
+    }
+  });
+  return result;
+}
+
+/**
+ * 续期成功后重放原请求。
+ *
+ * <p>⚠️ 必须带 `getResponse: true`，让 `request()` 交回**完整的 axios 响应**。
+ * 不带的话它会先把响应体 `.data` 掉一层，而这里返回的东西还要被 umi 的 `request`
+ * 再 `.data` 一次 —— 调用方拿到的是 `R` 里层的业务对象（形如 `{id:1,username:'alice'}`），
+ * 而不是 `{code:0,data:{...}}`。</p>
+ *
+ * <p>后果不是报错，而是**静默判定失败**：`res?.code === 0` 恒为假 → 各处把"成功"当成
+ * 失败。最典型的是 `getInitialState` 里那个 `/me`：拿不到用户信息 → `currentUser` 为
+ * undefined → 路由守卫认为未登录 → **整页刷新（或重新打开标签页）后备着有效令牌却被
+ * 踢回登录页**，用户不得不再登一次。这条路径只在"确实发生了令牌续期"时才走，所以表现
+ * 得像间歇性故障：刚登录进去一切正常，刷一下页面就退回登录页。</p>
+ */
+function replayRequest(originalConfig: any) {
+  const { url, headers, ...rest } = originalConfig ?? {};
+  return request(url, {
+    ...rest,
+    headers: headersWithoutAuthorization(headers),
+    _retried: true,
+    getResponse: true,
+  });
 }
 
 /**
@@ -223,7 +267,8 @@ export const errorConfig: RequestConfig = {
    * 响应拦截器：令牌过期时自动续期并**重放原请求**。
    *
    * <p>用户视角上这是"无感续期"：访问令牌 30 分钟就过期，正在填的表单不该因此被弹回
-   * 登录页。重放依赖请求拦截器重新注入 `Authorization` —— 那时内存里已经是新令牌了。</p>
+   * 登录页。重放依赖请求拦截器重新注入 `Authorization` —— 那时内存里已经是新令牌了，
+   * 所以重放前必须把旧头摘掉（见 {@link replayRequest}）。</p>
    *
    * <p>{@code _retried} 标记保证每个请求最多重放一次：续期后仍然 401（例如账号刚被停用）
    * 就直接回登录页，不会陷入"刷新→重放→再刷新"的循环。</p>
@@ -241,8 +286,7 @@ export const errorConfig: RequestConfig = {
           throw buildHttpError(response);
         }
         if (await refreshOnce()) {
-          const retryConfig = { ...response.config, _retried: true };
-          return request(retryConfig.url, retryConfig);
+          return replayRequest(response.config);
         }
         // 刷新也救不回来（刷新令牌过期/被吊销/本地根本没有）—— 只能重新登录
         redirectToLogin();
