@@ -55,7 +55,7 @@ jobs:
           jarball=$(ls sable-app/target/sable-app-*.jar | head -1)
           echo "检查 $jarball"
           missing=0
-          for lib in hibernate-validator jakarta.validation-api spring-security-core; do
+          for lib in hibernate-validator jakarta.validation-api spring-security-core mysql-connector-j; do
             if unzip -l "$jarball" | grep -q "BOOT-INF/lib/${lib}"; then
               echo "  ok  $lib"
             else
