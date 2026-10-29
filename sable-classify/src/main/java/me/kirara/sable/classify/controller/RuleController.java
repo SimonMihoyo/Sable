@@ -9,6 +9,8 @@ import me.kirara.sable.classify.dto.RuleTestRequest;
 import me.kirara.sable.classify.engine.ClassifyEngine;
 import me.kirara.sable.classify.entity.ClassifyRule;
 import me.kirara.sable.classify.service.ClassifyRuleService;
+import me.kirara.sable.common.BusinessException;
+import me.kirara.sable.common.ErrorCode;
 import me.kirara.sable.common.R;
 import me.kirara.sable.common.page.PageQuery;
 import me.kirara.sable.common.page.PageResult;
@@ -97,8 +99,22 @@ public class RuleController {
         return R.ok();
     }
 
+    /**
+     * 删除规则。
+     *
+     * <p>内置规则（{@code is_builtin=true}）不可删除、只可停用：删掉之后"这个租户为什么
+     * 识别不出来"就只能靠翻历史数据回答，而停用至少在列表里还看得见。
+     * 这个约束在 API 文档 8.6 里本来就写了，这里把它落到代码上。</p>
+     */
     @DeleteMapping("/{id}")
     public R<Void> delete(@PathVariable Long id) {
+        ClassifyRule rule = ruleService.getById(id);
+        if (rule == null) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID.getCode(), "规则不存在");
+        }
+        if (Boolean.TRUE.equals(rule.getIsBuiltin())) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID.getCode(), "内置规则不可删除，可停用");
+        }
         ruleService.removeById(id);
         return R.ok();
     }
